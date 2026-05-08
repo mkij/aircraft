@@ -1,6 +1,6 @@
 extends Area2D
 
-const BULLET_SPEED = 800.0
+const BULLET_SPEED = 850.0
 const GRAVITY = 280.0
 
 var velocity = Vector2.ZERO

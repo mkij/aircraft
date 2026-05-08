@@ -5,20 +5,22 @@ enum Personality { AGGRESSIVE, CAUTIOUS, BALANCED }
 
 const ENEMY_BULLET_SCENE = preload("res://EnemyBullet.tscn")
 const DETECTION_RANGE = 600.0
-const ATTACK_RANGE = 500.0
+const ATTACK_RANGE = 600.0
 const SHOOT_COOLDOWN = 0.1
-const TURN_SPEED = 2.0
-const FIRE_ANGLE = 0.7
+const TURN_SPEED = 3.5
 
 var state = State.PATROL
 var personality = Personality.BALANCED
-var attack_delay = 0.0
 var shoot_timer = 0.0
 var max_hp = 3
 var facing = Vector2.LEFT
 var state_timer = 0.0
 var evade_rotation_dir = 1.0
 var hits_taken = 0
+var shoots_on_approach = false
+var chase_offset = Vector2.ZERO
+var personal_turn_speed = 3.5
+
 
 func _ready():
 	super._ready()
@@ -26,15 +28,11 @@ func _ready():
 	max_hp = 3
 	score_value = 30
 	speed = 220.0
-	match personality:
-		Personality.AGGRESSIVE:
-			attack_delay = randf_range(0.0, 0.15)
-		Personality.BALANCED:
-			attack_delay = randf_range(0.2, 0.5)
-		Personality.CAUTIOUS:
-			attack_delay = randf_range(0.5, 0.9)
 	facing = Vector2.LEFT
 	personality = randi() % 3
+	shoots_on_approach = randf() < randf_range(0.3, 0.5)
+	chase_offset = Vector2(randf_range(-80, 80), randf_range(-100, 100))
+	personal_turn_speed = randf_range(2.5, 4.5)
 
 func take_hit():
 	hp -= 1
@@ -46,7 +44,6 @@ func take_hit():
 
 func _react_to_hit():
 	evade_rotation_dir = 1.0 if randf() > 0.5 else -1.0
-
 	if hits_taken == 1:
 		state = State.FLINCH
 		state_timer = 0.6
@@ -65,7 +62,6 @@ func _enter_last_stand():
 			pool = [State.ESCAPE, State.ESCAPE, State.LAST_LOOP]
 		Personality.BALANCED:
 			pool = [State.DESPERATE, State.ESCAPE, State.LAST_LOOP]
-
 	var chosen = pool[randi() % pool.size()]
 	state = chosen
 	state_timer = 3.0
@@ -107,25 +103,27 @@ func _process(delta):
 		queue_free()
 
 func _patrol(delta):
-	if player != null:
-		var dist = global_position.distance_to(player.global_position)
-		if dist < DETECTION_RANGE:
-			attack_delay -= delta
-			if attack_delay <= 0:
-				state = State.ATTACK
+	if player == null or not is_instance_valid(player):
+		find_player()
+		return
+	var dist = global_position.distance_to(player.global_position)
+	var to_player = (player.global_position - global_position).normalized()
+	if shoots_on_approach and dist < ATTACK_RANGE and abs(facing.angle_to(to_player)) < 0.35 and shoot_timer <= 0:
+		_shoot(to_player)
+		shoot_timer = SHOOT_COOLDOWN
+	if dist < DETECTION_RANGE:
+		state = State.ATTACK
 
 func _attack(delta):
 	if player == null or not is_instance_valid(player):
 		state = State.PATROL
 		return
-
+	var target = player.global_position + chase_offset
+	var to_target = (target - global_position).normalized()
 	var to_player = (player.global_position - global_position).normalized()
-	facing = facing.lerp(to_player, TURN_SPEED * delta).normalized()
-
-	var angle_to_player = facing.angle_to(to_player)
+	facing = facing.lerp(to_target, personal_turn_speed * delta).normalized()
 	var dist = global_position.distance_to(player.global_position)
-
-	if abs(angle_to_player) < FIRE_ANGLE and dist < ATTACK_RANGE and shoot_timer <= 0:
+	if dist < ATTACK_RANGE and abs(facing.angle_to(to_player)) < 0.35 and shoot_timer <= 0:
 		_shoot(to_player)
 		shoot_timer = SHOOT_COOLDOWN
 
@@ -137,7 +135,6 @@ func _flinch(delta):
 	var evade_dir = (away + side).normalized()
 	facing = facing.lerp(evade_dir, 4.0 * delta).normalized()
 	speed = 300.0
-
 	if state_timer <= 0:
 		if hits_taken >= 2:
 			state = State.EVADE
@@ -161,6 +158,7 @@ func _reposition(delta):
 	var behind_player = player.global_position + Vector2(200, 0)
 	var to_target = (behind_player - global_position).normalized()
 	facing = facing.lerp(to_target, TURN_SPEED * delta).normalized()
+	speed = 220.0
 	if state_timer <= 0:
 		state = State.ATTACK
 
@@ -171,13 +169,9 @@ func _desperate(delta):
 	facing = facing.lerp(to_player, TURN_SPEED * 2.0 * delta).normalized()
 	speed = 320.0
 	var dist = global_position.distance_to(player.global_position)
-	if dist < ATTACK_RANGE and shoot_timer <= 0:
+	if dist < ATTACK_RANGE and abs(facing.angle_to(to_player)) < 0.5 and shoot_timer <= 0:
 		_shoot(to_player)
 		shoot_timer = SHOOT_COOLDOWN * 0.5
-	if state_timer <= 0:
-		state = State.REPOSITION
-		state_timer = 1.5
-		speed = 220.0
 
 func _escape(delta):
 	if player == null or not is_instance_valid(player):
@@ -187,15 +181,18 @@ func _escape(delta):
 	speed = 320.0
 
 func _last_loop(delta):
-	facing = facing.rotated(evade_rotation_dir * 4.0 * delta)
-	speed = 280.0
+	var climb = -facing.y
+	var rot_speed = 4.0 + climb * 2.5
+	var move_speed = 280.0 - climb * 80.0
+	facing = facing.rotated(evade_rotation_dir * rot_speed * delta)
+	speed = move_speed
 	if state_timer <= 0:
 		state = State.DESPERATE
 		state_timer = 2.0
 
 func _shoot(direction: Vector2):
 	var bullet = ENEMY_BULLET_SCENE.instantiate()
-	bullet.position = global_position
+	bullet.position = global_position + facing * 20
 	var spread = randf_range(-0.04, 0.04)
 	bullet.setup(direction.rotated(spread))
 	get_parent().add_child(bullet)

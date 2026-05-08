@@ -1,10 +1,10 @@
 extends CharacterBody2D
 
-const FORWARD_SPEED = 280.0
-const TURN_SPEED = 3.2
+const FORWARD_SPEED = 220.0
+const TURN_SPEED = 3.0
 const BULLET_SCENE = preload("res://Bullet.tscn")
 const BOMB_SCENE = preload("res://Bomb.tscn")
-const SHOOT_COOLDOWN = 0.08
+const SHOOT_COOLDOWN = 0.083
 const BOMB_COOLDOWN = 1.0
 const GRAVITY = 280.0
 const MAP_TOP = 40.0
@@ -35,12 +35,16 @@ func _physics_process(delta):
 			_reenter()
 		return
 
-	if Input.is_action_pressed("ui_left") or Input.is_action_pressed("ui_up"):
-		rotation -= TURN_SPEED * delta
-	if Input.is_action_pressed("ui_right") or Input.is_action_pressed("ui_down"):
-		rotation += TURN_SPEED * delta
+	var climb = -sin(rotation)
+	var current_turn = TURN_SPEED + climb * 0.8
+	var current_speed = FORWARD_SPEED - climb * 25.0
 
-	velocity = Vector2(cos(rotation), sin(rotation)) * FORWARD_SPEED
+	if Input.is_action_pressed("ui_left") or Input.is_action_pressed("ui_up"):
+		rotation -= current_turn * delta
+	if Input.is_action_pressed("ui_right") or Input.is_action_pressed("ui_down"):
+		rotation += current_turn * delta
+
+	velocity = Vector2(cos(rotation), sin(rotation)) * current_speed
 	move_and_slide()
 
 	if position.y < -50:
