@@ -12,10 +12,14 @@ z_index = -10
 script = ExtResource("3_bg001")
 
 [node name="Player" parent="." instance=ExtResource("1_xyz99")]
-position = Vector2(200, 300)
+position = Vector2(576, 300)
+
+[node name="Camera2D" type="Camera2D" parent="Player"]
+enabled = true
+position_smoothing_enabled = false
 
 [node name="EnemySpawner" type="Timer" parent="."]
-wait_time = 2.0
+wait_time = 3.0
 autostart = true
 
 [node name="CanvasLayer" type="CanvasLayer" parent="."]

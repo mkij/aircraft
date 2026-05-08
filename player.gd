@@ -1,51 +1,80 @@
 extends CharacterBody2D
 
-const SPEED = 280.0
+const FORWARD_SPEED = 280.0
+const TURN_SPEED = 2.2
 const BULLET_SCENE = preload("res://Bullet.tscn")
 const BOMB_SCENE = preload("res://Bomb.tscn")
-const SCREEN_W = 1152.0
-const SCREEN_H = 648.0
-const SHOOT_COOLDOWN = 0.15
+const SHOOT_COOLDOWN = 0.08
 const BOMB_COOLDOWN = 1.0
 const GRAVITY = 280.0
+const MAP_TOP = 40.0
+const MAP_BOTTOM = 580.0
+const REENTRY_DELAY = 1.0
 
+var map_type = "ground"
 var hp = 3
 var shoot_timer = 0.0
 var bomb_timer = 0.0
+var offscreen = false
+var reentry_timer = 0.0
 
 func _ready():
 	add_to_group("player")
+	position = Vector2(200, 300)
+	rotation = 0.0
 
 func _physics_process(delta):
 	shoot_timer -= delta
 	bomb_timer -= delta
 
-	var direction = Vector2.ZERO
+	if offscreen:
+		reentry_timer -= delta
+		if reentry_timer <= 0:
+			_reenter()
+		return
 
-	if Input.is_action_pressed("ui_right"):
-		direction.x += 1
-	if Input.is_action_pressed("ui_left"):
-		direction.x -= 1
-	if Input.is_action_pressed("ui_up"):
-		direction.y -= 1
-	if Input.is_action_pressed("ui_down"):
-		direction.y += 1
+	if Input.is_action_pressed("ui_left") or Input.is_action_pressed("ui_up"):
+		rotation -= TURN_SPEED * delta
+	if Input.is_action_pressed("ui_right") or Input.is_action_pressed("ui_down"):
+		rotation += TURN_SPEED * delta
 
-	velocity = direction.normalized() * SPEED if direction != Vector2.ZERO else Vector2.ZERO
+	velocity = Vector2(cos(rotation), sin(rotation)) * FORWARD_SPEED
 	move_and_slide()
 
-	if velocity.length() > 10:
-		rotation = velocity.angle()
+	position.x = clamp(position.x, 0, 1152)
 
-	position.x = clamp(position.x, 20, SCREEN_W - 20)
-	position.y = clamp(position.y, 20, SCREEN_H - 20)
+	if position.y < MAP_TOP:
+		offscreen = true
+		reentry_timer = REENTRY_DELAY
+		visible = false
 
-	queue_redraw()
+	elif position.y > MAP_BOTTOM:
+		if map_type == "ground":
+			get_parent().game_over()
+			return
+		else:
+			offscreen = true
+			reentry_timer = REENTRY_DELAY
+			visible = false
 
 	if Input.is_action_pressed("ui_accept"):
 		shoot()
 
+	queue_redraw()
+
+func _reenter():
+	offscreen = false
+	visible = true
+	if position.y < MAP_TOP:
+		position.y = MAP_TOP + 30
+		rotation = deg_to_rad(randf_range(45, 70))
+	else:
+		position.y = MAP_BOTTOM - 30
+		rotation = deg_to_rad(randf_range(-70, -45))
+
 func _draw():
+	if offscreen:
+		return
 	draw_rect(Rect2(-22, -7, 44, 14), Color(0.7, 0.7, 0.8))
 	draw_circle(Vector2(18, -4), 7, Color(0.75, 0.75, 0.85))
 	var top_wing = PackedVector2Array([
@@ -58,7 +87,7 @@ func _draw():
 		Vector2(-12, -18), Vector2(-24, -18)
 	])
 	draw_colored_polygon(tail_top, Color(0.55, 0.55, 0.7))
-	var shoot_dir = Vector2.RIGHT.rotated(rotation)
+	var shoot_dir = Vector2(cos(rotation), sin(rotation))
 	var bullet_vel = shoot_dir * 800.0 + velocity
 	var points = _calculate_trajectory(bullet_vel)
 	for i in range(points.size() - 1):
@@ -76,7 +105,7 @@ func _calculate_trajectory(initial_velocity: Vector2) -> Array:
 		points.append(pos)
 		vel.y += GRAVITY * dt
 		pos += vel * dt
-		if pos.y > SCREEN_H - position.y or pos.y < -position.y:
+		if abs(pos.y) > 800:
 			break
 	return points
 
@@ -85,18 +114,18 @@ func _input(event):
 		drop_bomb()
 
 func shoot():
-	if shoot_timer > 0:
+	if shoot_timer > 0 or offscreen:
 		return
 	shoot_timer = SHOOT_COOLDOWN
 	var bullet = BULLET_SCENE.instantiate()
 	bullet.position = global_position
 	var spread = randf_range(-0.03, 0.03)
-	var shoot_dir = Vector2.RIGHT.rotated(rotation + spread)
+	var shoot_dir = Vector2(cos(rotation + spread), sin(rotation + spread))
 	bullet.setup(velocity, shoot_dir)
 	get_parent().add_child(bullet)
 
 func drop_bomb():
-	if bomb_timer > 0:
+	if bomb_timer > 0 or offscreen:
 		return
 	bomb_timer = BOMB_COOLDOWN
 	var bomb = BOMB_SCENE.instantiate()
