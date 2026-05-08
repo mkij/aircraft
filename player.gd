@@ -1,17 +1,20 @@
 extends CharacterBody2D
 
-const SPEED = 400.0
+const SPEED = 280.0
 const BULLET_SCENE = preload("res://Bullet.tscn")
 const BOMB_SCENE = preload("res://Bomb.tscn")
 const SCREEN_W = 1152.0
 const SCREEN_H = 648.0
-const SHOOT_COOLDOWN = 0.08
+const SHOOT_COOLDOWN = 0.15
 const BOMB_COOLDOWN = 1.0
 const GRAVITY = 280.0
 
 var hp = 3
 var shoot_timer = 0.0
 var bomb_timer = 0.0
+
+func _ready():
+	add_to_group("player")
 
 func _physics_process(delta):
 	shoot_timer -= delta
@@ -43,6 +46,18 @@ func _physics_process(delta):
 		shoot()
 
 func _draw():
+	draw_rect(Rect2(-22, -7, 44, 14), Color(0.7, 0.7, 0.8))
+	draw_circle(Vector2(18, -4), 7, Color(0.75, 0.75, 0.85))
+	var top_wing = PackedVector2Array([
+		Vector2(-5, -7), Vector2(10, -7),
+		Vector2(5, -22), Vector2(-12, -22)
+	])
+	draw_colored_polygon(top_wing, Color(0.6, 0.6, 0.75))
+	var tail_top = PackedVector2Array([
+		Vector2(-22, -7), Vector2(-10, -7),
+		Vector2(-12, -18), Vector2(-24, -18)
+	])
+	draw_colored_polygon(tail_top, Color(0.55, 0.55, 0.7))
 	var shoot_dir = Vector2.RIGHT.rotated(rotation)
 	var bullet_vel = shoot_dir * 800.0 + velocity
 	var points = _calculate_trajectory(bullet_vel)
@@ -75,7 +90,8 @@ func shoot():
 	shoot_timer = SHOOT_COOLDOWN
 	var bullet = BULLET_SCENE.instantiate()
 	bullet.position = global_position
-	var shoot_dir = Vector2.RIGHT.rotated(rotation)
+	var spread = randf_range(-0.03, 0.03)
+	var shoot_dir = Vector2.RIGHT.rotated(rotation + spread)
 	bullet.setup(velocity, shoot_dir)
 	get_parent().add_child(bullet)
 

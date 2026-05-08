@@ -1,7 +1,6 @@
 extends Node2D
 
 const ENEMY_SCENE = preload("res://Enemy.tscn")
-const ENEMY_TYPES = ["scout", "scout", "fighter", "fighter", "heavy"]
 
 var score = 0
 
@@ -11,10 +10,8 @@ func _ready():
 
 func _on_spawn_timer():
     var enemy = ENEMY_SCENE.instantiate()
-    var type = ENEMY_TYPES[randi() % ENEMY_TYPES.size()]
-    enemy.position = Vector2(1100, randf_range(50, 550))
+    enemy.position = Vector2(1150, randf_range(80, 520))
     add_child(enemy)
-    enemy.setup(type)
 
 func add_score(points):
     score += points

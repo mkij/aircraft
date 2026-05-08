@@ -1,0 +1,21 @@
+[gd_scene format=3 uid="uid://ryrd8xc06yaa"]
+
+[ext_resource type="Script" path="res://enemy_bullet.gd" id="1_eb01"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_eb02"]
+radius = 3.0
+height = 10.0
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_eb03"]
+width = 10
+height = 4
+
+[node name="EnemyBullet" type="Area2D"]
+script = ExtResource("1_eb01")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CapsuleShape2D_eb02")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+modulate = Color(1, 0.3, 0.3, 1)
+texture = SubResource("GradientTexture2D_eb03")
