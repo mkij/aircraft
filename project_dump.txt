@@ -1,0 +1,752 @@
+﻿
+
+===== C:\Users\mateu\Documents\aircraft\background.gd =====
+
+extends Node2D
+
+const SCREEN_W = 1152.0
+const SCREEN_H = 648.0
+const GROUND_Y = 580.0
+const SKY_TOP = 40.0
+
+var clouds = []
+
+func _ready():
+	z_index = -10
+	for i in range(15):
+		clouds.append({
+			"x": randf_range(-2000, 2000),
+			"y": randf_range(SKY_TOP, GROUND_Y * 0.75),
+			"w": randf_range(80, 200),
+			"h": randf_range(25, 55),
+		})
+
+func _process(delta):
+	var players = get_tree().get_nodes_in_group("player")
+	if players.size() == 0:
+		return
+	var px = players[0].global_position.x
+	for cloud in clouds:
+		if cloud["x"] < px - SCREEN_W:
+			cloud["x"] = px + SCREEN_W + randf_range(0, 400)
+			cloud["y"] = randf_range(SKY_TOP, GROUND_Y * 0.75)
+	queue_redraw()
+
+func _draw():
+	var players = get_tree().get_nodes_in_group("player")
+	if players.size() == 0:
+		return
+	var px = players[0].global_position.x
+	var left = px - SCREEN_W
+	var right = px + SCREEN_W
+
+	draw_rect(Rect2(left, SKY_TOP - 200, right - left, GROUND_Y - SKY_TOP + 200), Color(0.38, 0.62, 0.92))
+	draw_rect(Rect2(left, GROUND_Y, right - left, 200), Color(0.18, 0.48, 0.28))
+
+	for cloud in clouds:
+		draw_rect(Rect2(cloud["x"], cloud["y"], cloud["w"], cloud["h"]), Color(1, 1, 1, 0.8))
+
+
+===== C:\Users\mateu\Documents\aircraft\base_enemy.gd =====
+
+extends Area2D
+
+var hp = 1
+var score_value = 10
+var speed = 200.0
+var player = null
+
+func _ready():
+	add_to_group("enemies")
+	area_entered.connect(_on_area_entered)
+	body_entered.connect(_on_body_entered)
+
+func _process(delta):
+	pass
+
+func take_hit():
+	hp -= 1
+	if hp <= 0:
+		die()
+
+func die():
+	if is_instance_valid(get_parent()) and get_parent().has_method("add_score"):
+		get_parent().add_score(score_value)
+	queue_free()
+
+func find_player():
+	var players = get_tree().get_nodes_in_group("player")
+	if players.size() > 0:
+		player = players[0]
+
+func _on_area_entered(area):
+	if area.is_in_group("player_bullet"):
+		take_hit()
+
+func _on_body_entered(body):
+	pass
+
+
+===== C:\Users\mateu\Documents\aircraft\bomb.gd =====
+
+extends Area2D
+
+const GRAVITY = 350.0
+const BLAST_RADIUS = 80.0
+
+var velocity = Vector2.ZERO
+
+func setup(player_velocity: Vector2):
+    velocity = player_velocity
+
+func _process(delta):
+    velocity.y += GRAVITY * delta
+    position += velocity * delta
+    rotation = velocity.angle()
+
+    if position.y > 700:
+        queue_free()
+
+func _on_area_entered(area):
+    explode()
+
+func _on_body_entered(body):
+    explode()
+
+func explode():
+    var enemies = get_tree().get_nodes_in_group("enemies")
+    for enemy in enemies:
+        if global_position.distance_to(enemy.global_position) <= BLAST_RADIUS:
+            get_parent().add_score(enemy.score_value)
+            enemy.queue_free()
+    queue_free()
+
+
+===== C:\Users\mateu\Documents\aircraft\Bomb.tscn =====
+
+[gd_scene format=3 uid="uid://bomb12345678"]
+
+[ext_resource type="Script" path="res://bomb.gd" id="1_bmb01"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_bmb02"]
+radius = 8.0
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_bmb03"]
+width = 16
+height = 16
+
+[node name="Bomb" type="Area2D"]
+script = ExtResource("1_bmb01")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CircleShape2D_bmb02")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = SubResource("GradientTexture2D_bmb03")
+
+
+===== C:\Users\mateu\Documents\aircraft\bullet.gd =====
+
+extends Area2D
+
+const BULLET_SPEED = 800.0
+const GRAVITY = 280.0
+
+var velocity = Vector2.ZERO
+
+func _ready():
+	add_to_group("player_bullet")
+
+func setup(player_velocity: Vector2, shoot_direction: Vector2):
+	velocity = shoot_direction * BULLET_SPEED + player_velocity
+
+func _physics_process(delta):
+	velocity.y += GRAVITY * delta
+	position += velocity * delta
+	rotation = velocity.angle()
+
+	if position.x > 1300 or position.x < -100 or position.y > 700 or position.y < -100:
+		queue_free()
+
+func _on_area_entered(area):
+	queue_free()
+
+
+===== C:\Users\mateu\Documents\aircraft\Bullet.tscn =====
+
+[gd_scene format=3 uid="uid://bullet123456"]
+
+[ext_resource type="Script" uid="uid://dpivfy8lty23y" path="res://bullet.gd" id="1_blt01"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_blt02"]
+radius = 4.0
+height = 16.0
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_blt03"]
+width = 16
+height = 6
+
+[node name="Bullet" type="Area2D" unique_id=1625078640]
+script = ExtResource("1_blt01")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=2012282896]
+shape = SubResource("CapsuleShape2D_blt02")
+
+[node name="Sprite2D" type="Sprite2D" parent="." unique_id=746526777]
+texture = SubResource("GradientTexture2D_blt03")
+
+
+===== C:\Users\mateu\Documents\aircraft\enemy.gd =====
+
+extends Area2D
+
+var speed = 250.0
+var hp = 1
+var score_value = 10
+
+func _ready():
+    add_to_group("enemies")
+    area_entered.connect(_on_area_entered)
+    body_entered.connect(_on_body_entered)
+
+func setup(type: String):
+    match type:
+        "scout":
+            speed = 350.0
+            hp = 1
+            score_value = 10
+            scale = Vector2(0.8, 0.8)
+        "fighter":
+            speed = 200.0
+            hp = 3
+            score_value = 30
+            scale = Vector2(1.0, 1.0)
+        "heavy":
+            speed = 120.0
+            hp = 6
+            score_value = 60
+            scale = Vector2(1.4, 1.4)
+
+func _process(delta):
+    position.x -= speed * delta
+    if position.x < -100:
+        queue_free()
+
+func _on_area_entered(area):
+    hp -= 1
+    if hp <= 0:
+        get_parent().add_score(score_value)
+        queue_free()
+
+func _on_body_entered(body):
+    if body.has_method("take_damage"):
+        body.take_damage()
+    queue_free()
+
+
+===== C:\Users\mateu\Documents\aircraft\Enemy.tscn =====
+
+[gd_scene load_steps=4 format=3 uid="uid://enemy1234567"]
+
+[ext_resource type="Script" path="res://enemy_fighter.gd" id="1_enm01"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_enm02"]
+radius = 10.0
+height = 30.0
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_enm03"]
+width = 32
+height = 16
+
+[node name="Enemy" type="Area2D"]
+script = ExtResource("1_enm01")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CapsuleShape2D_enm02")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+modulate = Color(1, 0.4, 0.4, 1)
+texture = SubResource("GradientTexture2D_enm03")
+
+
+===== C:\Users\mateu\Documents\aircraft\EnemyBullet.tscn =====
+
+[gd_scene format=3 uid="uid://ryrd8xc06yaa"]
+
+[ext_resource type="Script" path="res://enemy_bullet.gd" id="1_eb01"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_eb02"]
+radius = 3.0
+height = 10.0
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_eb03"]
+width = 10
+height = 4
+
+[node name="EnemyBullet" type="Area2D"]
+script = ExtResource("1_eb01")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CapsuleShape2D_eb02")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+modulate = Color(1, 0.3, 0.3, 1)
+texture = SubResource("GradientTexture2D_eb03")
+
+
+===== C:\Users\mateu\Documents\aircraft\enemy_bullet.gd =====
+
+extends Area2D
+
+const SPEED = 500.0
+var velocity = Vector2.ZERO
+
+func setup(direction: Vector2):
+    velocity = direction * SPEED
+    rotation = direction.angle()
+
+func _process(delta):
+    position += velocity * delta
+    if position.x < -100 or position.x > 1300 or position.y < -100 or position.y > 750:
+        queue_free()
+
+func _on_body_entered(body):
+    if body.has_method("take_damage"):
+        body.take_damage()
+    queue_free()
+
+
+===== C:\Users\mateu\Documents\aircraft\enemy_fighter.gd =====
+
+extends "res://base_enemy.gd"
+
+enum State { PATROL, ATTACK, FLINCH, EVADE, REPOSITION, DESPERATE, ESCAPE, LAST_LOOP }
+enum Personality { AGGRESSIVE, CAUTIOUS, BALANCED }
+
+const ENEMY_BULLET_SCENE = preload("res://EnemyBullet.tscn")
+const DETECTION_RANGE = 600.0
+const ATTACK_RANGE = 320.0
+const SHOOT_COOLDOWN = 0.1
+const TURN_SPEED = 2.0
+const FIRE_ANGLE = 0.7
+
+var state = State.PATROL
+var personality = Personality.BALANCED
+var attack_delay = 0.0
+var shoot_timer = 0.0
+var max_hp = 3
+var facing = Vector2.LEFT
+var state_timer = 0.0
+var evade_rotation_dir = 1.0
+var hits_taken = 0
+
+func _ready():
+	super._ready()
+	hp = 3
+	max_hp = 3
+	score_value = 30
+	speed = 220.0
+	attack_delay = randf_range(0.3, 0.8)
+	facing = Vector2.LEFT
+	personality = randi() % 3
+
+func take_hit():
+	hp -= 1
+	hits_taken += 1
+	if hp <= 0:
+		die()
+		return
+	_react_to_hit()
+
+func _react_to_hit():
+	evade_rotation_dir = 1.0 if randf() > 0.5 else -1.0
+
+	if hits_taken == 1:
+		state = State.FLINCH
+		state_timer = 0.6
+	elif hits_taken == 2:
+		state = State.FLINCH
+		state_timer = 0.4
+	else:
+		_enter_last_stand()
+
+func _enter_last_stand():
+	var pool = []
+	match personality:
+		Personality.AGGRESSIVE:
+			pool = [State.DESPERATE, State.DESPERATE, State.LAST_LOOP]
+		Personality.CAUTIOUS:
+			pool = [State.ESCAPE, State.ESCAPE, State.LAST_LOOP]
+		Personality.BALANCED:
+			pool = [State.DESPERATE, State.ESCAPE, State.LAST_LOOP]
+
+	var chosen = pool[randi() % pool.size()]
+	state = chosen
+	state_timer = 3.0
+	if chosen == State.LAST_LOOP:
+		evade_rotation_dir = 1.0 if randf() > 0.5 else -1.0
+
+func _process(delta):
+	shoot_timer -= delta
+	state_timer -= delta
+
+	if player == null or not is_instance_valid(player):
+		find_player()
+
+	match state:
+		State.PATROL:
+			_patrol(delta)
+		State.ATTACK:
+			_attack(delta)
+		State.FLINCH:
+			_flinch(delta)
+		State.EVADE:
+			_evade(delta)
+		State.REPOSITION:
+			_reposition(delta)
+		State.DESPERATE:
+			_desperate(delta)
+		State.ESCAPE:
+			_escape(delta)
+		State.LAST_LOOP:
+			_last_loop(delta)
+
+	rotation = facing.angle()
+	position += facing * speed * delta
+
+	if position.x < -150 or position.x > 1300 or position.y < -100 or position.y > 750:
+		queue_free()
+
+func _patrol(delta):
+	if player != null:
+		var dist = global_position.distance_to(player.global_position)
+		if dist < DETECTION_RANGE:
+			attack_delay -= delta
+			if attack_delay <= 0:
+				state = State.ATTACK
+
+func _attack(delta):
+	if player == null or not is_instance_valid(player):
+		state = State.PATROL
+		return
+
+	var to_player = (player.global_position - global_position).normalized()
+	facing = facing.lerp(to_player, TURN_SPEED * delta).normalized()
+
+	var angle_to_player = facing.angle_to(to_player)
+	var dist = global_position.distance_to(player.global_position)
+
+	if abs(angle_to_player) < FIRE_ANGLE and dist < ATTACK_RANGE and shoot_timer <= 0:
+		_shoot(to_player)
+		shoot_timer = SHOOT_COOLDOWN
+
+func _flinch(delta):
+	var away = Vector2.ZERO
+	if player != null:
+		away = (global_position - player.global_position).normalized()
+	var side = Vector2(-away.y, away.x) * evade_rotation_dir
+	var evade_dir = (away + side).normalized()
+	facing = facing.lerp(evade_dir, 4.0 * delta).normalized()
+	speed = 300.0
+
+	if state_timer <= 0:
+		if hits_taken >= 2:
+			state = State.EVADE
+			state_timer = 1.8
+		else:
+			state = State.REPOSITION
+			state_timer = 2.0
+		speed = 220.0
+
+func _evade(delta):
+	facing = facing.rotated(evade_rotation_dir * 3.5 * delta)
+	if state_timer <= 0:
+		state = State.REPOSITION
+		state_timer = 2.0
+		speed = 220.0
+
+func _reposition(delta):
+	if player == null or not is_instance_valid(player):
+		state = State.PATROL
+		return
+	var behind_player = player.global_position + Vector2(200, 0)
+	var to_target = (behind_player - global_position).normalized()
+	facing = facing.lerp(to_target, TURN_SPEED * delta).normalized()
+	if state_timer <= 0:
+		state = State.ATTACK
+
+func _desperate(delta):
+	if player == null or not is_instance_valid(player):
+		return
+	var to_player = (player.global_position - global_position).normalized()
+	facing = facing.lerp(to_player, TURN_SPEED * 2.0 * delta).normalized()
+	speed = 320.0
+	var dist = global_position.distance_to(player.global_position)
+	if dist < ATTACK_RANGE and shoot_timer <= 0:
+		_shoot(to_player)
+		shoot_timer = SHOOT_COOLDOWN * 0.5
+	if state_timer <= 0:
+		state = State.REPOSITION
+		state_timer = 1.5
+		speed = 220.0
+
+func _escape(delta):
+	if player == null or not is_instance_valid(player):
+		return
+	var away = (global_position - player.global_position).normalized()
+	facing = facing.lerp(away, 3.0 * delta).normalized()
+	speed = 320.0
+
+func _last_loop(delta):
+	facing = facing.rotated(evade_rotation_dir * 4.0 * delta)
+	speed = 280.0
+	if state_timer <= 0:
+		state = State.DESPERATE
+		state_timer = 2.0
+
+func _shoot(direction: Vector2):
+	var bullet = ENEMY_BULLET_SCENE.instantiate()
+	bullet.position = global_position
+	var spread = randf_range(-0.04, 0.04)
+	bullet.setup(direction.rotated(spread))
+	get_parent().add_child(bullet)
+
+
+===== C:\Users\mateu\Documents\aircraft\main.gd =====
+
+extends Node2D
+
+const ENEMY_SCENE = preload("res://Enemy.tscn")
+
+var score = 0
+
+func _ready():
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	$EnemySpawner.timeout.connect(_on_spawn_timer)
+
+func _on_spawn_timer():
+	var enemy = ENEMY_SCENE.instantiate()
+	enemy.position = Vector2(1150, randf_range(80, 520))
+	add_child(enemy)
+
+func add_score(points):
+	score += points
+	$CanvasLayer/ScoreLabel.text = "Score: " + str(score)
+
+func update_hp(hp):
+	$CanvasLayer/HPLabel.text = "HP: " + str(hp)
+
+func game_over():
+	get_tree().paused = true
+	$CanvasLayer/GameOverLabel.visible = true
+
+func _input(event):
+	if event.is_action_pressed("ui_accept") and get_tree().paused:
+		get_tree().paused = false
+		get_tree().reload_current_scene()
+
+
+===== C:\Users\mateu\Documents\aircraft\Main.tscn =====
+
+[gd_scene load_steps=4 format=3 uid="uid://c1d2e3f4g5h6"]
+
+[ext_resource type="PackedScene" uid="uid://bq3k5m7n9p2r" path="res://Player.tscn" id="1_xyz99"]
+[ext_resource type="Script" path="res://main.gd" id="2_main1"]
+[ext_resource type="Script" path="res://background.gd" id="3_bg001"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("2_main1")
+
+[node name="Background" type="Node2D" parent="."]
+z_index = -10
+script = ExtResource("3_bg001")
+
+[node name="Player" parent="." instance=ExtResource("1_xyz99")]
+position = Vector2(576, 300)
+
+[node name="Camera2D" type="Camera2D" parent="Player"]
+enabled = true
+position_smoothing_enabled = false
+
+[node name="EnemySpawner" type="Timer" parent="."]
+wait_time = 3.0
+autostart = true
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="ScoreLabel" type="Label" parent="CanvasLayer"]
+offset_left = 20.0
+offset_top = 20.0
+text = "Score: 0"
+
+[node name="HPLabel" type="Label" parent="CanvasLayer"]
+offset_left = 20.0
+offset_top = 50.0
+text = "HP: 3"
+
+[node name="GameOverLabel" type="Label" parent="CanvasLayer"]
+offset_left = 400.0
+offset_top = 280.0
+text = "GAME OVER
+Spacja = restart"
+visible = false
+
+
+===== C:\Users\mateu\Documents\aircraft\player.gd =====
+
+extends CharacterBody2D
+
+const FORWARD_SPEED = 280.0
+const TURN_SPEED = 2.2
+const BULLET_SCENE = preload("res://Bullet.tscn")
+const BOMB_SCENE = preload("res://Bomb.tscn")
+const SHOOT_COOLDOWN = 0.08
+const BOMB_COOLDOWN = 1.0
+const GRAVITY = 280.0
+const MAP_TOP = 40.0
+const MAP_BOTTOM = 580.0
+const REENTRY_DELAY = 1.0
+
+var map_type = "ground"
+var hp = 3
+var shoot_timer = 0.0
+var bomb_timer = 0.0
+var offscreen = false
+var reentry_timer = 0.0
+
+func _ready():
+	add_to_group("player")
+	position = Vector2(200, 300)
+	rotation = 0.0
+
+func _physics_process(delta):
+	shoot_timer -= delta
+	bomb_timer -= delta
+
+	if offscreen:
+		reentry_timer -= delta
+		if reentry_timer <= 0:
+			_reenter()
+		return
+
+	if Input.is_action_pressed("ui_left") or Input.is_action_pressed("ui_up"):
+		rotation -= TURN_SPEED * delta
+	if Input.is_action_pressed("ui_right") or Input.is_action_pressed("ui_down"):
+		rotation += TURN_SPEED * delta
+
+	velocity = Vector2(cos(rotation), sin(rotation)) * FORWARD_SPEED
+	move_and_slide()
+
+	position.x = clamp(position.x, 0, 1152)
+
+	if position.y < MAP_TOP:
+		offscreen = true
+		reentry_timer = REENTRY_DELAY
+		visible = false
+
+	elif position.y > MAP_BOTTOM:
+		if map_type == "ground":
+			get_parent().game_over()
+			return
+		else:
+			offscreen = true
+			reentry_timer = REENTRY_DELAY
+			visible = false
+
+	if Input.is_action_pressed("ui_accept"):
+		shoot()
+
+	queue_redraw()
+
+func _reenter():
+	offscreen = false
+	visible = true
+	if position.y < MAP_TOP:
+		position.y = MAP_TOP + 30
+		rotation = deg_to_rad(randf_range(45, 70))
+	else:
+		position.y = MAP_BOTTOM - 30
+		rotation = deg_to_rad(randf_range(-70, -45))
+
+func _draw():
+	if offscreen:
+		return
+	draw_rect(Rect2(-22, -7, 44, 14), Color(0.7, 0.7, 0.8))
+	draw_circle(Vector2(18, -4), 7, Color(0.75, 0.75, 0.85))
+	var top_wing = PackedVector2Array([
+		Vector2(-5, -7), Vector2(10, -7),
+		Vector2(5, -22), Vector2(-12, -22)
+	])
+	draw_colored_polygon(top_wing, Color(0.6, 0.6, 0.75))
+	var tail_top = PackedVector2Array([
+		Vector2(-22, -7), Vector2(-10, -7),
+		Vector2(-12, -18), Vector2(-24, -18)
+	])
+	draw_colored_polygon(tail_top, Color(0.55, 0.55, 0.7))
+	var shoot_dir = Vector2(cos(rotation), sin(rotation))
+	var bullet_vel = shoot_dir * 800.0 + velocity
+	var points = _calculate_trajectory(bullet_vel)
+	for i in range(points.size() - 1):
+		var alpha = 1.0 - float(i) / points.size()
+		var p1 = points[i].rotated(-rotation)
+		var p2 = points[i + 1].rotated(-rotation)
+		draw_line(p1, p2, Color(1, 0.8, 0, alpha), 1.5)
+
+func _calculate_trajectory(initial_velocity: Vector2) -> Array:
+	var points = []
+	var pos = Vector2.ZERO
+	var vel = initial_velocity
+	var dt = 0.05
+	for i in range(60):
+		points.append(pos)
+		vel.y += GRAVITY * dt
+		pos += vel * dt
+		if abs(pos.y) > 800:
+			break
+	return points
+
+func _input(event):
+	if event is InputEventKey and event.keycode == KEY_CTRL and event.pressed:
+		drop_bomb()
+
+func shoot():
+	if shoot_timer > 0 or offscreen:
+		return
+	shoot_timer = SHOOT_COOLDOWN
+	var bullet = BULLET_SCENE.instantiate()
+	bullet.position = global_position
+	var spread = randf_range(-0.03, 0.03)
+	var shoot_dir = Vector2(cos(rotation + spread), sin(rotation + spread))
+	bullet.setup(velocity, shoot_dir)
+	get_parent().add_child(bullet)
+
+func drop_bomb():
+	if bomb_timer > 0 or offscreen:
+		return
+	bomb_timer = BOMB_COOLDOWN
+	var bomb = BOMB_SCENE.instantiate()
+	bomb.position = global_position
+	bomb.setup(velocity)
+	get_parent().add_child(bomb)
+
+func take_damage():
+	hp -= 1
+	get_parent().update_hp(hp)
+	if hp <= 0:
+		get_parent().game_over()
+		queue_free()
+
+
+===== C:\Users\mateu\Documents\aircraft\Player.tscn =====
+
+[gd_scene format=3 uid="uid://bq3k5m7oap2r"]
+
+[ext_resource type="Script" uid="uid://diqttji8p0aan" path="res://player.gd" id="1_a1b2c"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_d3e4f"]
+
+[node name="Player" type="CharacterBody2D" unique_id=337907380]
+script = ExtResource("1_a1b2c")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=2016208824]
+shape = SubResource("CapsuleShape2D_d3e4f")

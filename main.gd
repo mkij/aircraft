@@ -10,7 +10,7 @@ func _ready():
 
 func _on_spawn_timer():
 	var enemy = ENEMY_SCENE.instantiate()
-	enemy.position = Vector2(1150, randf_range(80, 520))
+	enemy.position = Vector2($Player.position.x + 800, randf_range(80, 520))
 	add_child(enemy)
 
 func add_score(points):

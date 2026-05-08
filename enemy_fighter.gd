@@ -5,7 +5,7 @@ enum Personality { AGGRESSIVE, CAUTIOUS, BALANCED }
 
 const ENEMY_BULLET_SCENE = preload("res://EnemyBullet.tscn")
 const DETECTION_RANGE = 600.0
-const ATTACK_RANGE = 320.0
+const ATTACK_RANGE = 500.0
 const SHOOT_COOLDOWN = 0.1
 const TURN_SPEED = 2.0
 const FIRE_ANGLE = 0.7
@@ -26,7 +26,13 @@ func _ready():
 	max_hp = 3
 	score_value = 30
 	speed = 220.0
-	attack_delay = randf_range(0.3, 0.8)
+	match personality:
+		Personality.AGGRESSIVE:
+			attack_delay = randf_range(0.0, 0.15)
+		Personality.BALANCED:
+			attack_delay = randf_range(0.2, 0.5)
+		Personality.CAUTIOUS:
+			attack_delay = randf_range(0.5, 0.9)
 	facing = Vector2.LEFT
 	personality = randi() % 3
 
@@ -94,7 +100,10 @@ func _process(delta):
 	rotation = facing.angle()
 	position += facing * speed * delta
 
-	if position.x < -150 or position.x > 1300 or position.y < -100 or position.y > 750:
+	var cam_x = 0.0
+	if player != null and is_instance_valid(player):
+		cam_x = player.global_position.x
+	if position.x < cam_x - 1000 or position.x > cam_x + 1500 or position.y < -500 or position.y > 1200:
 		queue_free()
 
 func _patrol(delta):

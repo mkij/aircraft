@@ -1,7 +1,7 @@
 extends CharacterBody2D
 
 const FORWARD_SPEED = 280.0
-const TURN_SPEED = 2.2
+const TURN_SPEED = 3.2
 const BULLET_SCENE = preload("res://Bullet.tscn")
 const BOMB_SCENE = preload("res://Bomb.tscn")
 const SHOOT_COOLDOWN = 0.08
@@ -22,6 +22,8 @@ func _ready():
 	add_to_group("player")
 	position = Vector2(200, 300)
 	rotation = 0.0
+	$Camera2D.limit_top = -14
+	$Camera2D.limit_bottom = 634
 
 func _physics_process(delta):
 	shoot_timer -= delta
@@ -41,9 +43,7 @@ func _physics_process(delta):
 	velocity = Vector2(cos(rotation), sin(rotation)) * FORWARD_SPEED
 	move_and_slide()
 
-	position.x = clamp(position.x, 0, 1152)
-
-	if position.y < MAP_TOP:
+	if position.y < -50:
 		offscreen = true
 		reentry_timer = REENTRY_DELAY
 		visible = false
@@ -51,6 +51,8 @@ func _physics_process(delta):
 	elif position.y > MAP_BOTTOM:
 		if map_type == "ground":
 			get_parent().game_over()
+			set_physics_process(false)
+			visible = false
 			return
 		else:
 			offscreen = true
@@ -66,7 +68,7 @@ func _reenter():
 	offscreen = false
 	visible = true
 	if position.y < MAP_TOP:
-		position.y = MAP_TOP + 30
+		position.y = -40
 		rotation = deg_to_rad(randf_range(45, 70))
 	else:
 		position.y = MAP_BOTTOM - 30

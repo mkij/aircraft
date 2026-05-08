@@ -36,8 +36,8 @@ func _draw():
 	var left = px - SCREEN_W
 	var right = px + SCREEN_W
 
-	draw_rect(Rect2(left, SKY_TOP - 200, right - left, GROUND_Y - SKY_TOP + 200), Color(0.38, 0.62, 0.92))
-	draw_rect(Rect2(left, GROUND_Y, right - left, 200), Color(0.18, 0.48, 0.28))
+	draw_rect(Rect2(left, -3000, right - left, GROUND_Y + 3000), Color(0.38, 0.62, 0.92))
+	draw_rect(Rect2(left, GROUND_Y, right - left, 3000), Color(0.18, 0.48, 0.28))
 
 	for cloud in clouds:
 		draw_rect(Rect2(cloud["x"], cloud["y"], cloud["w"], cloud["h"]), Color(1, 1, 1, 0.8))
