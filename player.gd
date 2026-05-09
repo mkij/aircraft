@@ -6,7 +6,7 @@ const BULLET_SCENE = preload("res://Bullet.tscn")
 const BOMB_SCENE = preload("res://Bomb.tscn")
 const SHOOT_COOLDOWN = 0.083
 const BOMB_COOLDOWN = 1.0
-const GRAVITY = 280.0
+const GRAVITY = 50.0
 const MAP_TOP = 40.0
 const MAP_BOTTOM = 580.0
 const REENTRY_DELAY = 1.0
@@ -125,7 +125,7 @@ func shoot():
 	shoot_timer = SHOOT_COOLDOWN
 	var bullet = BULLET_SCENE.instantiate()
 	bullet.position = global_position
-	var spread = randf_range(-0.03, 0.03)
+	var spread = randf_range(-0.012, 0.012)
 	var shoot_dir = Vector2(cos(rotation + spread), sin(rotation + spread))
 	bullet.setup(velocity, shoot_dir)
 	get_parent().add_child(bullet)

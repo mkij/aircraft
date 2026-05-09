@@ -1,7 +1,7 @@
 extends Area2D
 
 const BULLET_SPEED = 850.0
-const GRAVITY = 280.0
+const GRAVITY = 50.0
 
 var velocity = Vector2.ZERO
 var lifetime = 5.0
