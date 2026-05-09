@@ -27,6 +27,9 @@ var weave_dir = 1.0
 var burst_count = 0
 var burst_max = 4
 var burst_pause = 0.0
+var target_position = Vector2.ZERO
+var reaction_timer = 0.0
+var reaction_delay = 0.5
 
 
 func _ready():
@@ -40,8 +43,15 @@ func _ready():
 	shoots_on_approach = randf() < randf_range(0.3, 0.5)
 	attacks_on_approach = randf() < 0.45
 	chase_offset = Vector2(randf_range(-60, 60), randf_range(-30, 30))
-	personal_turn_speed = randf_range(2.5, 4.5)
+	personal_turn_speed = randf_range(1.5, 2.4)
 	burst_max = randi_range(3, 6)
+	match personality:
+		Personality.AGGRESSIVE:
+			reaction_delay = randf_range(0.2, 0.4)
+		Personality.BALANCED:
+			reaction_delay = randf_range(0.4, 0.7)
+		Personality.CAUTIOUS:
+			reaction_delay = randf_range(0.5, 0.9)
 
 func take_hit():
 	hp -= 1
@@ -88,6 +98,12 @@ func _process(delta):
 	if player == null or not is_instance_valid(player):
 		find_player()
 
+	reaction_timer -= delta
+	if reaction_timer <= 0:
+		if player != null and is_instance_valid(player):
+			target_position = player.global_position
+		reaction_timer = reaction_delay	
+
 	match state:
 		State.PATROL:
 			_patrol(delta)
@@ -120,7 +136,8 @@ func _patrol(delta):
 		find_player()
 		return
 	var dist = global_position.distance_to(player.global_position)
-	var to_player = (player.global_position - global_position).normalized()
+	var to_player_real = (player.global_position - global_position).normalized()
+	var to_player = (target_position - global_position).normalized()
 
 	if attacks_on_approach:
 		if shoots_on_approach and dist < ATTACK_RANGE and abs(facing.angle_to(to_player)) < 0.2 and shoot_timer <= 0:
@@ -138,12 +155,13 @@ func _attack(delta):
 	if player == null or not is_instance_valid(player):
 		state = State.PATROL
 		return
-	var to_player = (player.global_position - global_position).normalized()
+	var to_player_real = (player.global_position - global_position).normalized()
+	var to_player = (target_position - global_position).normalized()
 	var dist = global_position.distance_to(player.global_position)
 	attack_timer += delta
 	burst_pause -= delta
 
-	if facing.dot(to_player) < -0.2:
+	if facing.dot(to_player_real) < -0.2:
 		state = State.REPOSITION
 		state_timer = 2.5
 		return
@@ -154,13 +172,13 @@ func _attack(delta):
 		return
 
 	var weave = Vector2(-to_player.y, to_player.x) * weave_dir * 20.0
-	var target = player.global_position + weave
+	var target = target_position + weave
 	var to_target = (target - global_position).normalized()
 	var angle_diff = facing.angle_to(to_target)
 	var max_turn = personal_turn_speed * delta
 	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
 
-	if dist < ATTACK_RANGE and abs(facing.angle_to(to_player)) < 0.2 and shoot_timer <= 0 and burst_pause <= 0:
+	if dist < ATTACK_RANGE and abs(facing.angle_to(to_player_real)) < 0.2 and shoot_timer <= 0 and burst_pause <= 0:
 		_shoot(facing)
 		shoot_timer = SHOOT_COOLDOWN
 		attack_timer = 0.0
@@ -180,9 +198,11 @@ func _flinch(delta):
 	if player != null:
 		away = (global_position - player.global_position).normalized()
 	var side = Vector2(-away.y, away.x) * evade_rotation_dir
-	var evade_dir = (away + side).normalized()
-	facing = facing.lerp(evade_dir, 4.0 * delta).normalized()
-	speed = 300.0
+	var evade_dir = (away * 0.3 + side * 0.7).normalized()
+	var angle_diff = facing.angle_to(evade_dir)
+	var max_turn = personal_turn_speed * delta
+	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
+	speed = 230.0
 	if state_timer <= 0:
 		if hits_taken >= 2:
 			state = State.EVADE
@@ -203,10 +223,9 @@ func _reposition(delta):
 	if player == null or not is_instance_valid(player):
 		state = State.PATROL
 		return
-	var behind_player = player.global_position + Vector2(400, 0)
-	var to_target = (behind_player - global_position).normalized()
-	var angle_diff = facing.angle_to(to_target)
-	var max_turn = personal_turn_speed * 0.4 * delta
+	var to_player = (player.global_position - global_position).normalized()
+	var angle_diff = facing.angle_to(to_player)
+	var max_turn = personal_turn_speed * 0.8 * delta
 	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
 	speed = 220.0
 	if state_timer <= 0:
