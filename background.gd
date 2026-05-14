@@ -23,6 +23,7 @@ func _process(delta):
 		return
 	var px = players[0].global_position.x
 	for cloud in clouds:
+		cloud["x"] -= 60.0 * delta
 		if cloud["x"] < px - SCREEN_W:
 			cloud["x"] = px + SCREEN_W + randf_range(0, 400)
 			cloud["y"] = randf_range(SKY_TOP, GROUND_Y * 0.75)

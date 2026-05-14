@@ -1,12 +1,21 @@
 extends CharacterBody2D
 
-const FORWARD_SPEED = 220.0
+const PASSIVE_SPEED = 220.0
+const MAX_SPEED = 320.0
+const MIN_SPEED = 50.0
+const GRAVITY_EFFECT = 120.0
+const SPEED_DAMPING = 1.5
+const SHOT_ROTATION_RECOVERY = 4.5
+const STALL_SPEED = 80.0
+const STALL_FRAMES = 40
+const STALL_RECOVERY_TIME = 3.0
 const TURN_SPEED = 3.0
 const BULLET_SCENE = preload("res://Bullet.tscn")
 const BOMB_SCENE = preload("res://Bomb.tscn")
 const SHOOT_COOLDOWN = 0.083
 const BOMB_COOLDOWN = 1.0
-const GRAVITY = 50.0
+const GRAVITY = 30.0
+const BULLET_SPEED = 850.0
 const MAP_TOP = 40.0
 const MAP_BOTTOM = 580.0
 const REENTRY_DELAY = 1.0
@@ -17,6 +26,12 @@ var shoot_timer = 0.0
 var bomb_timer = 0.0
 var offscreen = false
 var reentry_timer = 0.0
+var current_speed = 220.0
+var shot_rotation = 0.0
+var stall_counter = 0
+var stalling = false
+var stall_timer = 3.0
+var stall_spin_dir = 1.0
 
 func _ready():
 	add_to_group("player")
@@ -28,6 +43,7 @@ func _ready():
 func _physics_process(delta):
 	shoot_timer -= delta
 	bomb_timer -= delta
+	shot_rotation = move_toward(shot_rotation, 0.0, SHOT_ROTATION_RECOVERY * delta)
 
 	if offscreen:
 		reentry_timer -= delta
@@ -35,14 +51,35 @@ func _physics_process(delta):
 			_reenter()
 		return
 
+	if stalling:
+		_handle_stall(delta)
+		return
+
 	var climb = -sin(rotation)
 	var current_turn = TURN_SPEED + climb * 0.8
-	var current_speed = FORWARD_SPEED - climb * 25.0
 
 	if Input.is_action_pressed("ui_left") or Input.is_action_pressed("ui_up"):
 		rotation -= current_turn * delta
 	if Input.is_action_pressed("ui_right") or Input.is_action_pressed("ui_down"):
 		rotation += current_turn * delta
+
+	rotation += shot_rotation * delta
+
+	current_speed -= climb * GRAVITY_EFFECT * delta
+	if current_speed < PASSIVE_SPEED:
+		var recovery_strength = 40.0 + (1.0 - clamp(climb, 0.0, 1.0)) * 120.0
+		current_speed = move_toward(current_speed, PASSIVE_SPEED, recovery_strength * delta)
+	if current_speed > PASSIVE_SPEED:
+		current_speed = lerp(current_speed, PASSIVE_SPEED, SPEED_DAMPING * delta)
+
+	if current_speed < STALL_SPEED:
+		stall_counter += 1
+	else:
+		stall_counter = 0
+	if stall_counter >= STALL_FRAMES:
+		stalling = true
+		stall_timer = STALL_RECOVERY_TIME
+		stall_spin_dir = 1.0 if randf() > 0.5 else -1.0
 
 	velocity = Vector2(cos(rotation), sin(rotation)) * current_speed
 	move_and_slide()
@@ -51,20 +88,57 @@ func _physics_process(delta):
 		offscreen = true
 		reentry_timer = REENTRY_DELAY
 		visible = false
-
 	elif position.y > MAP_BOTTOM:
 		if map_type == "ground":
 			get_parent().game_over()
 			set_physics_process(false)
 			visible = false
 			return
-		else:
-			offscreen = true
-			reentry_timer = REENTRY_DELAY
-			visible = false
 
 	if Input.is_action_pressed("ui_accept"):
 		shoot()
+
+	var climb_display = -sin(rotation)
+	if get_parent().has_method("update_debug"):
+		get_parent().update_debug(current_speed, climb_display, stalling)
+
+	queue_redraw()
+
+func _handle_stall(delta):
+	rotation += 3.5 * stall_spin_dir * delta
+	shot_rotation = 0.0
+
+	var climb = -sin(rotation)
+	current_speed -= climb * GRAVITY_EFFECT * 1.5 * delta
+	current_speed = clamp(current_speed, MIN_SPEED, MAX_SPEED)
+
+	if Input.is_action_pressed("ui_left") or Input.is_action_pressed("ui_up"):
+		rotation -= TURN_SPEED * 0.3 * delta
+	if Input.is_action_pressed("ui_right") or Input.is_action_pressed("ui_down"):
+		rotation += TURN_SPEED * 0.3 * delta
+
+	velocity = Vector2(cos(rotation), sin(rotation)) * current_speed
+	move_and_slide()
+
+	if current_speed > STALL_SPEED + 30:
+		stalling = false
+		stall_counter = 0
+
+	stall_timer -= delta
+	if stall_timer <= 0:
+		get_parent().game_over()
+		set_physics_process(false)
+		visible = false
+
+	if position.y > MAP_BOTTOM:
+		if map_type == "ground":
+			get_parent().game_over()
+			set_physics_process(false)
+			visible = false
+
+	var climb_display = -sin(rotation)
+	if get_parent().has_method("update_debug"):
+		get_parent().update_debug(current_speed, climb_display, stalling)
 
 	queue_redraw()
 
@@ -94,7 +168,7 @@ func _draw():
 	])
 	draw_colored_polygon(tail_top, Color(0.55, 0.55, 0.7))
 	var shoot_dir = Vector2(cos(rotation), sin(rotation))
-	var bullet_vel = shoot_dir * 800.0 + velocity
+	var bullet_vel = shoot_dir * BULLET_SPEED + velocity
 	var points = _calculate_trajectory(bullet_vel)
 	for i in range(points.size() - 1):
 		var alpha = 1.0 - float(i) / points.size()
@@ -141,6 +215,7 @@ func drop_bomb():
 
 func take_damage():
 	hp -= 1
+	shot_rotation += randf_range(1.5, 3.0) * (1.0 if randf() > 0.5 else -1.0)
 	get_parent().update_hp(hp)
 	if hp <= 0:
 		get_parent().game_over()
