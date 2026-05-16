@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://cekphunsy071a"]
+
+[ext_resource type="Script" uid="uid://cnmxhf7tva70n" path="res://convoy_vehicle.gd" id="1_v7so4"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_v7so4"]
+size = Vector2(36, 16)
+
+[node name="Area2D" type="Area2D" unique_id=517494558]
+script = ExtResource("1_v7so4")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=1102495613]
+shape = SubResource("RectangleShape2D_v7so4")

@@ -1,0 +1,1042 @@
+﻿===== enemy_fighter.gd =====
+extends "res://base_enemy.gd"
+
+enum State { PATROL, ATTACK, FLINCH, EVADE, REPOSITION, DESPERATE, ESCAPE, LAST_LOOP, PAUSE_ATTACK, RECOVER, DIVE, DEFENSIVE_LOOP, DYING, CLIMB, CLOUD_SEEK, CLOUD_HIDE }
+enum Personality { AGGRESSIVE, CAUTIOUS, BALANCED }
+
+const PlanePhysicsClass = preload("res://plane_physics.gd")
+var flight = PlanePhysicsClass.new()
+
+const ENEMY_BULLET_SCENE = preload("res://EnemyBullet.tscn")
+const DETECTION_RANGE = 600.0
+const ATTACK_RANGE = 600.0
+const SHOOT_COOLDOWN = 0.1
+const TURN_SPEED = 3.5
+const MAX_HEAT = 15.0
+const HEAT_COOLDOWN = 5.0
+
+var state = State.PATROL
+var personality = Personality.BALANCED
+var shoot_timer = 0.0
+var max_hp = 3
+var facing = Vector2.LEFT
+var state_timer = 0.0
+var evade_rotation_dir = 1.0
+var hits_taken = 0
+var personal_turn_speed = 3.5
+var attack_timer = 0.0
+var weave_timer = 0.0
+var weave_dir = 1.0
+var burst_count = 0
+var burst_max = 4
+var burst_pause = 0.0
+var target_position = Vector2.ZERO
+var reaction_timer = 0.0
+var reaction_delay = 0.5
+var hunt_timer = 0.0
+var hunt_length = 8.0
+var last_maneuver = ""
+var maneuver_cooldown = 0.0
+var heat = 0.0
+var overheated = false
+var in_cloud = false
+
+
+func _ready():
+	super._ready()
+	hp = 3
+	max_hp = 3
+	score_value = 30
+	facing = Vector2.LEFT
+	personality = randi() % 3
+	personal_turn_speed = randf_range(2.8, 3.8)
+	burst_max = randi_range(3, 6)
+	match personality:
+		Personality.AGGRESSIVE:
+			reaction_delay = randf_range(0.2, 0.4)
+		Personality.BALANCED:
+			reaction_delay = randf_range(0.4, 0.7)
+		Personality.CAUTIOUS:
+			reaction_delay = randf_range(0.5, 0.9)
+	hunt_length = randf_range(4.0, 8.0)
+	if get_tree().get_nodes_in_group("player").size() > 0:
+		target_position = get_tree().get_nodes_in_group("player")[0].global_position
+	flight.passive_speed = 220.0
+	flight.max_speed = 300.0
+	flight.min_speed = 120.0
+	flight.gravity_effect = 80.0
+	flight.use_climb_recovery = false
+	flight.speed = 220.0
+
+func take_hit():
+	hp -= 1
+	hits_taken += 1
+	if hp <= 0:
+		die()
+		return
+	_react_to_hit()
+	flight.apply_hit()
+
+func die():
+	print("DIE CALLED: hp=", hp, " hits=", hits_taken)
+	if is_instance_valid(get_parent()) and get_parent().has_method("add_score"):
+		get_parent().add_score(score_value)
+	state = State.DYING
+	state_timer = 2.5
+	modulate = Color(0.4, 0.1, 0.1, 0.8)
+	set_deferred("monitoring", false)
+	set_deferred("monitorable", false)
+	remove_from_group("enemies")
+
+func _react_to_hit():
+	evade_rotation_dir = 1.0 if randf() > 0.5 else -1.0
+	if hits_taken == 1:
+		state = State.FLINCH
+		state_timer = 0.6
+	elif hits_taken == 2:
+		state = State.FLINCH
+		state_timer = 0.4
+	else:
+		_enter_last_stand()
+
+func _enter_last_stand():
+	var pool = []
+	match personality:
+		Personality.AGGRESSIVE:
+			pool = [State.DESPERATE, State.DESPERATE, State.LAST_LOOP]
+		Personality.CAUTIOUS:
+			pool = [State.ESCAPE, State.ESCAPE, State.LAST_LOOP]
+		Personality.BALANCED:
+			pool = [State.DESPERATE, State.ESCAPE, State.LAST_LOOP]
+	var chosen = pool[randi() % pool.size()]
+	state = chosen
+	state_timer = 3.0
+	if chosen == State.LAST_LOOP:
+		evade_rotation_dir = 1.0 if randf() > 0.5 else -1.0
+
+func _process(delta):
+	shoot_timer -= delta
+	state_timer -= delta
+	weave_timer -= delta
+	if weave_timer <= 0:
+		weave_dir = -weave_dir
+		weave_timer = randf_range(2.0, 4.0)
+
+	if player == null or not is_instance_valid(player):
+		find_player()
+
+	reaction_timer -= delta
+	if reaction_timer <= 0:
+		if player != null and is_instance_valid(player):
+			if not player.in_cloud:
+				target_position = player.global_position
+		reaction_timer = reaction_delay
+
+	maneuver_cooldown -= delta
+	flight.update_shot_rotation(delta)
+	if abs(flight.shot_rotation) > 0.01:
+		facing = facing.rotated(flight.shot_rotation * delta)
+
+	if overheated:
+		heat -= HEAT_COOLDOWN * delta
+		if heat <= 0:
+			heat = 0
+			overheated = false
+	else:
+		heat = max(0, heat - HEAT_COOLDOWN * 0.5 * delta)
+
+	if state == State.DYING:
+		_dying(delta)
+		rotation = facing.angle()
+		position += facing * flight.speed * delta
+		if position.y > 570 or state_timer <= 0:
+			queue_free()
+		return
+
+	var ground_immune = [State.CLIMB, State.FLINCH, State.EVADE, State.DEFENSIVE_LOOP]
+	if position.y > 430 and not ground_immune.has(state):
+		state = State.CLIMB
+
+	_execute_state(delta)
+	
+
+	flight.update_speed(-facing.y, delta)
+	if not flight.stalling:
+		flight.check_stall()
+	else:
+		var result = flight.handle_stall(delta, rotation, personal_turn_speed)
+		facing = Vector2.from_angle(result.rotation)
+		rotation = facing.angle()
+		position += facing * flight.speed * delta
+		if result.timeout:
+			die()
+		return
+
+	var cam_x = 0.0
+	if player != null and is_instance_valid(player):
+		cam_x = player.global_position.x
+
+	var near_x_border = position.x < cam_x - 400 or position.x > cam_x + 1000
+	if near_x_border:
+		var center_x = Vector2(cam_x + 200, position.y)
+		var to_center = (center_x - global_position).normalized()
+		var border_angle = facing.angle_to(to_center)
+		var border_turn = personal_turn_speed * 0.8 * delta
+		facing = facing.rotated(clamp(border_angle, -border_turn, border_turn))
+
+	rotation = facing.angle()
+	position += facing * flight.speed * delta
+
+	if position.y > 560:
+		position.y = 560
+
+	if position.x < cam_x - 1500 or position.x > cam_x + 2000 or position.y < -800 or position.y > 1500:
+		print("DESPAWN: state=", state, " pos=", position, " cam_x=", cam_x)
+		queue_free()
+
+func _execute_state(delta):
+	match state:
+		State.PATROL:
+			_patrol(delta)
+		State.ATTACK:
+			_attack(delta)
+		State.FLINCH:
+			_flinch(delta)
+		State.EVADE:
+			_evade(delta)
+		State.REPOSITION:
+			_reposition(delta)
+		State.DESPERATE:
+			_desperate(delta)
+		State.ESCAPE:
+			_escape(delta)
+		State.LAST_LOOP:
+			_last_loop(delta)
+		State.PAUSE_ATTACK:
+			_pause_attack(delta)
+		State.RECOVER:
+			_recover(delta)
+		State.DIVE:
+			_dive(delta)
+		State.DEFENSIVE_LOOP:
+			_defensive_loop(delta)
+		State.CLIMB:
+			_climb(delta)		
+
+func _exit_tree():
+	print("ENEMY REMOVED: state=", state, " pos=", position, " hp=", hp, " stalling=", flight.stalling)
+
+func _climb(delta):
+	var target_angle = 0.0
+	if facing.x >= 0:
+		target_angle = deg_to_rad(-35)
+	else:
+		target_angle = deg_to_rad(-180 + 35)
+	var climb_dir = Vector2(cos(target_angle), sin(target_angle))
+	var angle_diff = facing.angle_to(climb_dir)
+	var urgency = 1.0 + clamp((position.y - 430) / 100.0, 0, 3.0)
+	var max_turn = personal_turn_speed * urgency * delta
+	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
+	flight.target_speed_override = 220.0
+	if position.y < 300:
+		state = State.ATTACK
+		attack_timer = 0.0
+
+func _patrol(delta):
+	if player == null or not is_instance_valid(player):
+		find_player()
+		return
+	var dist = global_position.distance_to(player.global_position)
+	if dist < DETECTION_RANGE:
+		state = State.ATTACK
+		attack_timer = 0.0
+
+func _attack(delta):
+	if player == null or not is_instance_valid(player):
+		state = State.PATROL
+		return
+	var to_player = (player.global_position - global_position).normalized()
+	var dist = global_position.distance_to(player.global_position)
+	attack_timer += delta
+	burst_pause -= delta
+
+	if facing.dot(to_player) < -0.2:
+		if _try_evasion():
+			return
+		state = State.REPOSITION
+		state_timer = 2.5
+		return
+
+	if dist < 120:
+		state = State.REPOSITION
+		state_timer = 1.5
+		return
+
+	var weave = Vector2(-to_player.y, to_player.x) * weave_dir * 50.0
+	var target = player.global_position + weave
+	var to_target = (target - global_position).normalized()
+	var angle_diff = facing.angle_to(to_target)
+	var max_turn = personal_turn_speed * delta
+	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
+
+	if dist < ATTACK_RANGE and abs(facing.angle_to(to_player)) < 0.2 and shoot_timer <= 0 and burst_pause <= 0 and _is_line_clear():
+		_shoot(facing)
+		shoot_timer = SHOOT_COOLDOWN
+		attack_timer = 0.0
+		burst_count += 1
+		if burst_count >= burst_max:
+			burst_count = 0
+			burst_max = randi_range(3, 6)
+			burst_pause = randf_range(1.2, 2.5)
+
+	hunt_timer += delta
+	if hunt_timer > hunt_length:
+		hunt_timer = 0.0
+		state = State.REPOSITION
+		state_timer = 2.5
+		return
+
+	if attack_timer > 2.5:
+		attack_timer = 0.0
+		state = State.REPOSITION
+		state_timer = 1.5
+
+func _pause_attack(delta):
+	flight.target_speed_override = 220.0
+	if state_timer <= 0:
+		state = State.ATTACK
+		attack_timer = 0.0
+
+func _recover(delta):
+	if player != null and is_instance_valid(player):
+		var to_player = (player.global_position - global_position).normalized()
+		var angle_diff = facing.angle_to(to_player)
+		facing = facing.rotated(clamp(angle_diff, -personal_turn_speed * delta, personal_turn_speed * delta))
+	flight.target_speed_override = 220.0
+	if state_timer <= 0:
+		if _try_evasion():
+			return
+		state = State.ATTACK
+		attack_timer = 0.0
+
+func _flinch(delta):
+	var away = Vector2.ZERO
+	if player != null:
+		away = (global_position - player.global_position).normalized()
+	var side = Vector2(-away.y, away.x) * evade_rotation_dir
+	var evade_dir = (away * 0.3 + side * 0.7).normalized()
+	var angle_diff = facing.angle_to(evade_dir)
+	var max_turn = personal_turn_speed * delta
+	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
+	flight.target_speed_override = 230.0
+	if position.y > 430:
+		var turn_up = -1.0 if facing.x >= 0 else 1.0
+		facing = facing.rotated(turn_up * personal_turn_speed * delta)
+	if state_timer <= 0:
+		if hits_taken >= 2:
+			state = State.EVADE
+			state_timer = 1.8
+		else:
+			state = State.RECOVER
+			state_timer = randf_range(0.4, 0.7)
+		flight.target_speed_override = 220.0
+
+func _evade(delta):
+	facing = facing.rotated(evade_rotation_dir * 3.5 * delta)
+	if position.y > 430:
+		var turn_up = -1.0 if facing.x >= 0 else 1.0
+		facing = facing.rotated(turn_up * personal_turn_speed * delta)
+	if state_timer <= 0:
+		state = State.RECOVER
+		state_timer = randf_range(0.4, 0.7)
+		flight.target_speed_override = 220.0
+
+func _reposition(delta):
+	if player == null or not is_instance_valid(player):
+		state = State.PATROL
+		return
+	var to_player = (target_position - global_position).normalized()
+	var angle_diff = facing.angle_to(to_player)
+	var max_turn = personal_turn_speed * 0.8 * delta
+	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
+	flight.target_speed_override = 220.0
+	if state_timer <= 0:
+		state = State.PAUSE_ATTACK
+		state_timer = randf_range(0.2, 0.5)
+
+func _desperate(delta):
+	if player == null or not is_instance_valid(player):
+		return
+	var to_player = (player.global_position - global_position).normalized()
+	facing = facing.lerp(to_player, TURN_SPEED * 2.0 * delta).normalized()
+	flight.target_speed_override = 320.0
+	var dist = global_position.distance_to(player.global_position)
+	if dist < ATTACK_RANGE and abs(facing.angle_to(to_player)) < 0.5 and shoot_timer <= 0:
+		_shoot(to_player)
+		shoot_timer = SHOOT_COOLDOWN * 0.5
+
+func _escape(delta):
+	if player == null or not is_instance_valid(player):
+		return
+	var away = (global_position - player.global_position).normalized()
+	facing = facing.lerp(away, 3.0 * delta).normalized()
+	flight.target_speed_override = 320.0
+
+func _last_loop(delta):
+	var climb = -facing.y
+	var rot_speed = 4.0 + climb * 2.5
+	var move_speed = 280.0 - climb * 80.0
+	facing = facing.rotated(evade_rotation_dir * rot_speed * delta)
+	flight.target_speed_override = move_speed
+	if state_timer <= 0:
+		state = State.DESPERATE
+		state_timer = 2.0
+
+func _dying(delta):
+	facing = facing.rotated(4.5 * delta)
+	facing = (facing + Vector2(0, 0.15)).normalized()
+	flight.speed = move_toward(flight.speed, 80.0, 150.0 * delta)
+
+func _get_spread() -> float:
+	match state:
+		State.PATROL:
+			return 0.004
+		State.ATTACK:
+			return 0.010
+		State.DESPERATE:
+			return 0.020
+		State.FLINCH:
+			return 0.055
+		_:
+			return 0.012
+
+func _is_line_clear() -> bool:
+	if player == null:
+		return false
+	var to_player = player.global_position - global_position
+	var dist_to_player = to_player.length()
+	var dir = to_player.normalized()
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if e != self:
+			var to_enemy = e.global_position - global_position
+			var proj = to_enemy.dot(dir)
+			if proj > 0 and proj < dist_to_player:
+				var perp = abs(to_enemy.cross(dir))
+				if perp < 30:
+					return false
+	return true
+
+func _try_evasion() -> bool:
+	if maneuver_cooldown > 0:
+		return false
+	if player == null or not is_instance_valid(player):
+		return false
+
+	var dist = global_position.distance_to(player.global_position)
+	var near_ground = position.y > 380
+
+	var options = []
+	if not near_ground and last_maneuver != "dive":
+		options.append("dive")
+	if dist < 250 and last_maneuver != "loop" and maneuver_cooldown < -2.0:
+		options.append("loop")
+	if last_maneuver != "evade":
+		options.append("evade")
+
+	if options.size() == 0:
+		last_maneuver = ""
+		return false
+
+	var chosen = options[randi() % options.size()]
+	evade_rotation_dir = 1.0 if randf() > 0.5 else -1.0
+
+	match chosen:
+		"dive":
+			state = State.DIVE
+			state_timer = randf_range(1.0, 1.8)
+			last_maneuver = "dive"
+			maneuver_cooldown = randf_range(3.0, 5.0)
+		"loop":
+			state = State.DEFENSIVE_LOOP
+			state_timer = randf_range(1.5, 2.5)
+			last_maneuver = "loop"
+			maneuver_cooldown = randf_range(5.0, 8.0)
+		"evade":
+			state = State.EVADE
+			state_timer = randf_range(1.0, 1.5)
+			last_maneuver = "evade"
+			maneuver_cooldown = randf_range(2.0, 4.0)
+
+	return true
+
+func _dive(delta):
+	var dive_dir = Vector2(facing.x, abs(facing.x) * 0.7 + 0.3).normalized()
+	var angle_diff = facing.angle_to(dive_dir)
+	var max_turn = personal_turn_speed * 1.2 * delta
+	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
+	flight.target_speed_override = 260.0
+	if state_timer <= 0 or position.y > 380:
+		state = State.RECOVER
+		state_timer = randf_range(0.3, 0.6)
+		flight.target_speed_override = 220.0
+
+func _defensive_loop(delta):
+	var climb = -facing.y
+	var rot_speed = 2.5 + climb * 1.5
+	var move_speed = 250.0 - climb * 60.0
+	facing = facing.rotated(evade_rotation_dir * rot_speed * delta)
+	flight.target_speed_override = move_speed
+	if state_timer <= 0:
+		state = State.RECOVER
+		state_timer = randf_range(0.3, 0.6)
+		flight.target_speed_override = 220.0
+
+func _cloud_seek(delta):
+	state = State.REPOSITION
+	state_timer = 2.0
+
+func _cloud_hide(delta):
+	state = State.ATTACK
+	attack_timer = 0.0		
+
+func _shoot(direction: Vector2):
+	if overheated:
+		return
+	var bullet = ENEMY_BULLET_SCENE.instantiate()
+	bullet.position = global_position + facing * 20
+	var spread = randf_range(-_get_spread(), _get_spread())
+	bullet.setup(direction.rotated(spread))
+	get_parent().add_child(bullet)
+	heat += 1.0
+	if heat >= MAX_HEAT:
+		overheated = true
+
+
+===== enemy_ace.gd =====
+extends "res://enemy_fighter.gd"
+
+var target_cloud: Node2D = null
+
+func _ready():
+    super._ready()
+    hp = 5
+    max_hp = 5
+    score_value = 100
+    personal_turn_speed = randf_range(3.2, 4.2)
+    flight.passive_speed = 240.0
+    flight.max_speed = 340.0
+    flight.speed = 240.0
+    personality = Personality.AGGRESSIVE
+    reaction_delay = randf_range(0.1, 0.25)
+    modulate = Color(1.0, 0.85, 0.3, 1.0)
+
+func _try_evasion() -> bool:
+    if maneuver_cooldown > 0:
+        return false
+    if player == null or not is_instance_valid(player):
+        return false
+
+    var dist = global_position.distance_to(player.global_position)
+    var near_ground = position.y > 380
+    var player_above = player.global_position.y < global_position.y - 80
+    var player_behind_me = facing.dot((player.global_position - global_position).normalized()) < -0.3
+
+    evade_rotation_dir = 1.0 if randf() > 0.5 else -1.0
+
+    var cloud = _find_nearest_cloud()
+    if cloud and last_maneuver != "cloud" and dist < 450:
+        target_cloud = cloud
+        state = State.CLOUD_SEEK
+        state_timer = 3.0
+        last_maneuver = "cloud"
+        maneuver_cooldown = randf_range(6.0, 10.0)
+        return true
+
+    if player_above and not near_ground and last_maneuver != "dive":
+        state = State.DIVE
+        state_timer = randf_range(1.5, 2.5)
+        last_maneuver = "dive"
+        maneuver_cooldown = randf_range(3.0, 5.0)
+        return true
+
+    if player_behind_me and dist < 300 and last_maneuver != "loop":
+        state = State.DEFENSIVE_LOOP
+        state_timer = randf_range(1.5, 2.5)
+        last_maneuver = "loop"
+        maneuver_cooldown = randf_range(4.0, 6.0)
+        return true
+
+    if position.y < 200 and last_maneuver != "low":
+        state = State.DIVE
+        state_timer = randf_range(0.8, 1.3)
+        last_maneuver = "low"
+        maneuver_cooldown = randf_range(3.0, 5.0)
+        return true
+
+    if last_maneuver != "evade":
+        state = State.EVADE
+        state_timer = randf_range(0.8, 1.2)
+        last_maneuver = "evade"
+        maneuver_cooldown = randf_range(2.0, 3.0)
+        return true
+
+    last_maneuver = ""
+    return false
+
+func _enter_last_stand():
+    var options = []
+    
+    var cloud = _find_nearest_cloud()
+    if cloud:
+        options.append("cloud")
+    
+    if position.y < 350:
+        options.append("dive_escape")
+    
+    options.append("loop_and_run")
+    options.append("loop_and_run")
+    
+    var chosen = options[randi() % options.size()]
+    
+    match chosen:
+        "cloud":
+            target_cloud = cloud
+            state = State.CLOUD_SEEK
+            state_timer = 3.0
+            last_maneuver = "cloud"
+            maneuver_cooldown = randf_range(4.0, 6.0)
+        "dive_escape":
+            state = State.DIVE
+            state_timer = randf_range(1.5, 2.5)
+            last_maneuver = "dive"
+            maneuver_cooldown = randf_range(3.0, 5.0)
+        "loop_and_run":
+            evade_rotation_dir = 1.0 if randf() > 0.5 else -1.0
+            state = State.LAST_LOOP
+            state_timer = 2.0
+
+func _last_loop(delta):
+    super._last_loop(delta)
+    # Override: po loopie ace wraca do ATTACK zamiast DESPERATE
+    if state_timer <= 0:
+        state = State.ATTACK
+        attack_timer = 0.0              
+
+func _find_nearest_cloud() -> Node2D:
+    var clouds = get_tree().get_nodes_in_group("game_clouds")
+    var best = null
+    var best_dist = 999999.0
+    for c in clouds:
+        var d = global_position.distance_to(c.global_position)
+        if d < 500 and d < best_dist:
+            best = c
+            best_dist = d
+    return best
+
+func _execute_state(delta):
+    match state:
+        State.CLOUD_SEEK:
+            _cloud_seek(delta)
+        State.CLOUD_HIDE:
+            _cloud_hide(delta)
+        _:
+            super._execute_state(delta)    
+
+func _cloud_seek(delta):
+    if target_cloud == null or not is_instance_valid(target_cloud):
+        state = State.REPOSITION
+        state_timer = 2.0
+        return
+    var to_cloud = (target_cloud.global_position - global_position).normalized()
+    var angle_diff = facing.angle_to(to_cloud)
+    var max_turn = personal_turn_speed * delta
+    facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
+    flight.target_speed_override = 260.0
+    var dist = global_position.distance_to(target_cloud.global_position)
+    if dist < 80:
+        state = State.CLOUD_HIDE
+        state_timer = randf_range(1.5, 3.0)
+    if state_timer <= 0:
+        state = State.REPOSITION
+        state_timer = 2.0
+
+func _cloud_hide(delta):
+    flight.target_speed_override = 180.0
+    if state_timer <= 0 or not in_cloud:
+        state = State.ATTACK
+        attack_timer = 0.0
+
+func _get_spread() -> float:
+    match state:
+        State.PATROL:
+            return 0.003
+        State.ATTACK:
+            return 0.007
+        State.DESPERATE:
+            return 0.015
+        State.FLINCH:
+            return 0.040
+        _:
+            return 0.008
+
+===== aa_gun.gd =====
+extends "res://base_enemy.gd"
+
+const ENEMY_BULLET_SCENE = preload("res://EnemyBullet.tscn")
+const DETECTION_RANGE = 700.0
+const SHOOT_RANGE = 600.0
+const SHOOT_COOLDOWN = 0.15
+const BURST_SIZE = 4
+const BURST_PAUSE = 2.0
+const TURN_SPEED = 1.8
+const MIN_AIM_ANGLE = deg_to_rad(-160)
+const MAX_AIM_ANGLE = deg_to_rad(-20)
+
+var turret_angle = -PI / 2.0
+var shoot_timer = 0.0
+var burst_count = 0
+var burst_pause_timer = 0.0
+var barrel_length = 25.0
+
+func _ready():
+	super._ready()
+	hp = 4
+	score_value = 50
+	speed = 0.0
+
+func _process(delta):
+	shoot_timer -= delta
+	burst_pause_timer -= delta
+
+	if player == null or not is_instance_valid(player):
+		find_player()
+		return
+
+	var to_player = (player.global_position - global_position).normalized()
+	var target_angle = to_player.angle()
+	target_angle = clamp(target_angle, MIN_AIM_ANGLE, MAX_AIM_ANGLE)
+
+	var angle_diff = target_angle - turret_angle
+	angle_diff = wrapf(angle_diff, -PI, PI)
+	turret_angle += clamp(angle_diff, -TURN_SPEED * delta, TURN_SPEED * delta)
+
+	var dist = global_position.distance_to(player.global_position)
+	var aim_error = abs(turret_angle - target_angle)
+
+	if dist < SHOOT_RANGE and aim_error < 0.15 and shoot_timer <= 0 and burst_pause_timer <= 0:
+		_shoot()
+		shoot_timer = SHOOT_COOLDOWN
+		burst_count += 1
+		if burst_count >= BURST_SIZE:
+			burst_count = 0
+			burst_pause_timer = BURST_PAUSE
+
+	queue_redraw()
+
+func _shoot():
+	var bullet = ENEMY_BULLET_SCENE.instantiate()
+	var direction = Vector2(cos(turret_angle), sin(turret_angle))
+	bullet.position = global_position + direction * barrel_length
+	var spread = randf_range(-0.03, 0.03)
+	bullet.setup(direction.rotated(spread))
+	get_parent().add_child(bullet)
+
+func _draw():
+	draw_rect(Rect2(-20, -8, 40, 16), Color(0.35, 0.35, 0.3))
+	var dir = Vector2(cos(turret_angle - rotation), sin(turret_angle - rotation))
+	draw_line(Vector2.ZERO, dir * barrel_length, Color(0.5, 0.5, 0.45), 4.0)
+	draw_circle(Vector2.ZERO, 8, Color(0.4, 0.4, 0.35))
+
+func die():
+	if is_instance_valid(get_parent()) and get_parent().has_method("add_score"):
+		get_parent().add_score(score_value)
+	queue_free()
+
+===== enemy_bomber.gd =====
+extends "res://base_enemy.gd"
+
+const PlanePhysicsClass = preload("res://plane_physics.gd")
+var flight = PlanePhysicsClass.new()
+
+const ENEMY_BULLET_SCENE = preload("res://EnemyBullet.tscn")
+const GUNNER_RANGE = 500.0
+const GUNNER_COOLDOWN = 0.2
+const GUNNER_BURST = 3
+const GUNNER_PAUSE = 2.5
+const GUNNER_TURN_SPEED = 2.0
+
+var facing = Vector2.LEFT
+var turret_angle = 0.0
+var gunner_timer = 0.0
+var gunner_burst_count = 0
+var gunner_pause_timer = 0.0
+var fly_direction = Vector2.LEFT
+
+func _ready():
+	super._ready()
+	hp = 8
+	score_value = 80
+	speed = 0.0
+	facing = Vector2.LEFT
+	fly_direction = Vector2.LEFT
+	flight.passive_speed = 130.0
+	flight.max_speed = 180.0
+	flight.min_speed = 80.0
+	flight.gravity_effect = 40.0
+	flight.use_climb_recovery = false
+	flight.speed = 130.0
+	turret_angle = PI
+
+func _process(delta):
+	gunner_timer -= delta
+	gunner_pause_timer -= delta
+
+	if player == null or not is_instance_valid(player):
+		find_player()
+
+	facing = facing.lerp(fly_direction, 0.5 * delta).normalized()
+
+	flight.update_speed(-facing.y, delta)
+
+	rotation = facing.angle()
+	position += facing * flight.speed * delta
+
+	_update_gunner(delta)
+
+	var cam_x = 0.0
+	if player != null and is_instance_valid(player):
+		cam_x = player.global_position.x
+	if position.x < cam_x - 1500 or position.x > cam_x + 2000:
+		queue_free()
+
+	queue_redraw()
+
+func _update_gunner(delta):
+	if player == null or not is_instance_valid(player):
+		return
+
+	var to_player = (player.global_position - global_position).normalized()
+	var target_angle = to_player.angle()
+	var angle_diff = wrapf(target_angle - turret_angle, -PI, PI)
+	turret_angle += clamp(angle_diff, -GUNNER_TURN_SPEED * delta, GUNNER_TURN_SPEED * delta)
+
+	var dist = global_position.distance_to(player.global_position)
+	var aim_error = abs(wrapf(turret_angle - target_angle, -PI, PI))
+
+	if dist < GUNNER_RANGE and aim_error < 0.2 and gunner_timer <= 0 and gunner_pause_timer <= 0:
+		_gunner_shoot()
+		gunner_timer = GUNNER_COOLDOWN
+		gunner_burst_count += 1
+		if gunner_burst_count >= GUNNER_BURST:
+			gunner_burst_count = 0
+			gunner_pause_timer = GUNNER_PAUSE
+
+func _gunner_shoot():
+	var bullet = ENEMY_BULLET_SCENE.instantiate()
+	var direction = Vector2(cos(turret_angle), sin(turret_angle))
+	bullet.position = global_position + direction * 15
+	var spread = randf_range(-0.04, 0.04)
+	bullet.setup(direction.rotated(spread))
+	get_parent().add_child(bullet)
+
+func _draw():
+	draw_rect(Rect2(-30, -10, 60, 20), Color(0.4, 0.35, 0.3))
+	draw_rect(Rect2(-35, -6, 10, 12), Color(0.35, 0.3, 0.28))
+	draw_rect(Rect2(20, -14, 15, 8), Color(0.38, 0.33, 0.3))
+
+	var gun_dir = Vector2(cos(turret_angle - rotation), sin(turret_angle - rotation))
+	draw_circle(gun_dir * -5, 6, Color(0.45, 0.4, 0.35))
+	draw_line(gun_dir * -5, gun_dir * 15, Color(0.5, 0.45, 0.4), 3.0)
+
+func die():
+	if is_instance_valid(get_parent()) and get_parent().has_method("add_score"):
+		get_parent().add_score(score_value)
+	modulate = Color(0.4, 0.1, 0.1, 0.8)
+	set_deferred("monitoring", false)
+	set_deferred("monitorable", false)
+	remove_from_group("enemies")
+	var tween = create_tween()
+	tween.tween_property(self, "rotation", rotation + 2.0, 1.5)
+	tween.parallel().tween_property(self, "position:y", position.y + 300, 1.5)
+	tween.parallel().tween_property(self, "modulate:a", 0.0, 1.5)
+	tween.tween_callback(queue_free)
+
+===== balloon.gd =====
+extends "res://base_enemy.gd"
+
+const GROUND_Y = 580.0
+
+var sway_timer = 0.0
+var sway_offset = 0.0
+var base_x = 0.0
+
+func _ready():
+	super._ready()
+	hp = 3
+	score_value = 20
+	speed = 0.0
+	base_x = position.x
+	sway_timer = randf_range(0, TAU)
+
+func _process(delta):
+	sway_timer += delta * 0.8
+	sway_offset = sin(sway_timer) * 8.0
+	position.x = base_x + sway_offset
+	queue_redraw()
+
+func _on_body_entered(body):
+	if body.is_in_group("player") and body.has_method("take_damage"):
+		body.take_damage()
+
+func _draw():
+	var rope_bottom = GROUND_Y - global_position.y
+	draw_line(Vector2(0, 0), Vector2(0, rope_bottom), Color(0.4, 0.4, 0.35), 1.5)
+	_draw_balloon_shape(Vector2(0, 0), Vector2(18, 28), Color(0.6, 0.6, 0.55))
+	_draw_balloon_shape(Vector2(0, 0), Vector2(15, 25), Color(0.7, 0.7, 0.65))
+
+func _draw_balloon_shape(center: Vector2, size: Vector2, color: Color):
+	var points = PackedVector2Array()
+	for i in range(24):
+		var angle = TAU * i / 24.0
+		points.append(center + Vector2(cos(angle) * size.x, sin(angle) * size.y))
+	draw_colored_polygon(points, color)
+
+func die():
+	if is_instance_valid(get_parent()) and get_parent().has_method("add_score"):
+		get_parent().add_score(score_value)
+	var tween = create_tween()
+	tween.tween_property(self, "position:y", position.y - 100, 0.8).set_ease(Tween.EASE_OUT)
+	tween.parallel().tween_property(self, "modulate:a", 0.0, 0.8)
+	tween.tween_callback(queue_free)
+
+===== convoy_vehicle.gd =====
+extends "res://base_enemy.gd"
+
+const GROUND_Y = 568.0
+
+var drive_speed = 80.0
+var drive_direction = -1.0
+var vehicle_width = 36.0
+var vehicle_height = 16.0
+
+func _ready():
+	super._ready()
+	hp = 2
+	score_value = 15
+	speed = 0.0
+	position.y = GROUND_Y
+
+func _process(delta):
+	position.x += drive_speed * drive_direction * delta
+
+	var cam_x = 0.0
+	var players = get_tree().get_nodes_in_group("player")
+	if players.size() > 0:
+		cam_x = players[0].global_position.x
+	if position.x < cam_x - 1200 or position.x > cam_x + 2000:
+		queue_free()
+
+	queue_redraw()
+
+func _on_body_entered(body):
+	if body.is_in_group("player") and body.has_method("take_damage"):
+		body.take_damage()
+
+func setup(type: String):
+	match type:
+		"truck":
+			hp = 2
+			score_value = 15
+			drive_speed = 80.0
+			vehicle_width = 36.0
+			vehicle_height = 16.0
+		"car":
+			hp = 1
+			score_value = 10
+			drive_speed = 120.0
+			vehicle_width = 24.0
+			vehicle_height = 12.0
+
+func _draw():
+	draw_rect(Rect2(-vehicle_width / 2, -vehicle_height, vehicle_width, vehicle_height), Color(0.45, 0.4, 0.3))
+	draw_rect(Rect2(-vehicle_width / 2 + 4, -vehicle_height - 8, vehicle_width * 0.5, 8), Color(0.4, 0.38, 0.28))
+	draw_circle(Vector2(-vehicle_width / 3, 0), 4, Color(0.2, 0.2, 0.2))
+	draw_circle(Vector2(vehicle_width / 3, 0), 4, Color(0.2, 0.2, 0.2))
+
+func die():
+	if is_instance_valid(get_parent()) and get_parent().has_method("add_score"):
+		get_parent().add_score(score_value)
+	var tween = create_tween()
+	tween.tween_property(self, "modulate", Color(1, 0.3, 0, 0.8), 0.3)
+	tween.tween_property(self, "modulate:a", 0.0, 0.5)
+	tween.tween_callback(queue_free)
+
+===== convoy_aa.gd =====
+extends "res://convoy_vehicle.gd"
+
+const ENEMY_BULLET_SCENE = preload("res://EnemyBullet.tscn")
+const TURRET_RANGE = 450.0
+const TURRET_COOLDOWN = 0.25
+const TURRET_BURST = 3
+const TURRET_PAUSE = 3.0
+const TURRET_TURN_SPEED = 2.5
+const MIN_AIM_ANGLE = deg_to_rad(-170)
+const MAX_AIM_ANGLE = deg_to_rad(-10)
+
+var turret_angle = -PI / 2.0
+var turret_timer = 0.0
+var turret_burst_count = 0
+var turret_pause_timer = 0.0
+
+func _ready():
+	super._ready()
+	hp = 3
+	score_value = 40
+	drive_speed = 60.0
+	vehicle_width = 32.0
+	vehicle_height = 14.0
+
+func _process(delta):
+	super._process(delta)
+	turret_timer -= delta
+	turret_pause_timer -= delta
+	_update_turret(delta)
+
+func _update_turret(delta):
+	if player == null or not is_instance_valid(player):
+		find_player()
+		return
+
+	var to_player = (player.global_position - global_position).normalized()
+	var target_angle = to_player.angle()
+	target_angle = clamp(target_angle, MIN_AIM_ANGLE, MAX_AIM_ANGLE)
+
+	var angle_diff = wrapf(target_angle - turret_angle, -PI, PI)
+	turret_angle += clamp(angle_diff, -TURRET_TURN_SPEED * delta, TURRET_TURN_SPEED * delta)
+
+	var dist = global_position.distance_to(player.global_position)
+	var aim_error = abs(wrapf(turret_angle - target_angle, -PI, PI))
+
+	if dist < TURRET_RANGE and aim_error < 0.2 and turret_timer <= 0 and turret_pause_timer <= 0:
+		_turret_shoot()
+		turret_timer = TURRET_COOLDOWN
+		turret_burst_count += 1
+		if turret_burst_count >= TURRET_BURST:
+			turret_burst_count = 0
+			turret_pause_timer = TURRET_PAUSE
+
+func _turret_shoot():
+	var bullet = ENEMY_BULLET_SCENE.instantiate()
+	var direction = Vector2(cos(turret_angle), sin(turret_angle))
+	bullet.position = global_position + direction * 18
+	var spread = randf_range(-0.04, 0.04)
+	bullet.setup(direction.rotated(spread))
+	get_parent().add_child(bullet)
+
+func _draw():
+	super._draw()
+	var gun_dir = Vector2(cos(turret_angle), sin(turret_angle))
+	draw_circle(Vector2(0, -vehicle_height - 4), 5, Color(0.5, 0.48, 0.4))
+	draw_line(Vector2(0, -vehicle_height - 4), Vector2(0, -vehicle_height - 4) + gun_dir * 18, Color(0.55, 0.5, 0.45), 3.0)
+
+

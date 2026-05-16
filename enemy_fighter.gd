@@ -1,14 +1,16 @@
 extends "res://base_enemy.gd"
 
-enum State { PATROL, ATTACK, FLINCH, EVADE, REPOSITION, DESPERATE, ESCAPE, LAST_LOOP, PAUSE_ATTACK, RECOVER, DIVE, DEFENSIVE_LOOP, DYING, CLIMB }
+enum State { PATROL, ATTACK, FLINCH, EVADE, REPOSITION, DESPERATE, ESCAPE, LAST_LOOP, PAUSE_ATTACK, RECOVER, DIVE, DEFENSIVE_LOOP, DYING, CLIMB, CLOUD_SEEK, CLOUD_HIDE }
 enum Personality { AGGRESSIVE, CAUTIOUS, BALANCED }
+
+const PlanePhysicsClass = preload("res://plane_physics.gd")
+var flight = PlanePhysicsClass.new()
 
 const ENEMY_BULLET_SCENE = preload("res://EnemyBullet.tscn")
 const DETECTION_RANGE = 600.0
 const ATTACK_RANGE = 600.0
 const SHOOT_COOLDOWN = 0.1
 const TURN_SPEED = 3.5
-const PASSIVE_SPEED = 220.0
 const MAX_HEAT = 15.0
 const HEAT_COOLDOWN = 5.0
 
@@ -36,6 +38,7 @@ var last_maneuver = ""
 var maneuver_cooldown = 0.0
 var heat = 0.0
 var overheated = false
+var in_cloud = false
 
 
 func _ready():
@@ -43,7 +46,6 @@ func _ready():
 	hp = 3
 	max_hp = 3
 	score_value = 30
-	speed = 220.0
 	facing = Vector2.LEFT
 	personality = randi() % 3
 	personal_turn_speed = randf_range(2.8, 3.8)
@@ -58,6 +60,12 @@ func _ready():
 	hunt_length = randf_range(4.0, 8.0)
 	if get_tree().get_nodes_in_group("player").size() > 0:
 		target_position = get_tree().get_nodes_in_group("player")[0].global_position
+	flight.passive_speed = 220.0
+	flight.max_speed = 300.0
+	flight.min_speed = 120.0
+	flight.gravity_effect = 80.0
+	flight.use_climb_recovery = false
+	flight.speed = 220.0
 
 func take_hit():
 	hp -= 1
@@ -66,12 +74,15 @@ func take_hit():
 		die()
 		return
 	_react_to_hit()
+	flight.apply_hit()
 
 func die():
+	print("DIE CALLED: hp=", hp, " hits=", hits_taken)
 	if is_instance_valid(get_parent()) and get_parent().has_method("add_score"):
 		get_parent().add_score(score_value)
 	state = State.DYING
-	state_timer = 4.0
+	state_timer = 2.5
+	modulate = Color(0.4, 0.1, 0.1, 0.8)
 	set_deferred("monitoring", false)
 	set_deferred("monitorable", false)
 	remove_from_group("enemies")
@@ -116,10 +127,14 @@ func _process(delta):
 	reaction_timer -= delta
 	if reaction_timer <= 0:
 		if player != null and is_instance_valid(player):
-			target_position = player.global_position
+			if not player.in_cloud:
+				target_position = player.global_position
 		reaction_timer = reaction_delay
 
 	maneuver_cooldown -= delta
+	flight.update_shot_rotation(delta)
+	if abs(flight.shot_rotation) > 0.01:
+		facing = facing.rotated(flight.shot_rotation * delta)
 
 	if overheated:
 		heat -= HEAT_COOLDOWN * delta
@@ -132,7 +147,7 @@ func _process(delta):
 	if state == State.DYING:
 		_dying(delta)
 		rotation = facing.angle()
-		position += facing * speed * delta
+		position += facing * flight.speed * delta
 		if position.y > 570 or state_timer <= 0:
 			queue_free()
 		return
@@ -141,6 +156,44 @@ func _process(delta):
 	if position.y > 430 and not ground_immune.has(state):
 		state = State.CLIMB
 
+	_execute_state(delta)
+	
+
+	flight.update_speed(-facing.y, delta)
+	if not flight.stalling:
+		flight.check_stall()
+	else:
+		var result = flight.handle_stall(delta, rotation, personal_turn_speed)
+		facing = Vector2.from_angle(result.rotation)
+		rotation = facing.angle()
+		position += facing * flight.speed * delta
+		if result.timeout:
+			die()
+		return
+
+	var cam_x = 0.0
+	if player != null and is_instance_valid(player):
+		cam_x = player.global_position.x
+
+	var near_x_border = position.x < cam_x - 400 or position.x > cam_x + 1000
+	if near_x_border:
+		var center_x = Vector2(cam_x + 200, position.y)
+		var to_center = (center_x - global_position).normalized()
+		var border_angle = facing.angle_to(to_center)
+		var border_turn = personal_turn_speed * 0.8 * delta
+		facing = facing.rotated(clamp(border_angle, -border_turn, border_turn))
+
+	rotation = facing.angle()
+	position += facing * flight.speed * delta
+
+	if position.y > 560:
+		position.y = 560
+
+	if position.x < cam_x - 1500 or position.x > cam_x + 2000 or position.y < -800 or position.y > 1500:
+		print("DESPAWN: state=", state, " pos=", position, " cam_x=", cam_x)
+		queue_free()
+
+func _execute_state(delta):
 	match state:
 		State.PATROL:
 			_patrol(delta)
@@ -159,7 +212,7 @@ func _process(delta):
 		State.LAST_LOOP:
 			_last_loop(delta)
 		State.PAUSE_ATTACK:
-			_pause_attack(delta)
+			_pause_attack(delta)          
 		State.RECOVER:
 			_recover(delta)
 		State.DIVE:
@@ -167,36 +220,14 @@ func _process(delta):
 		State.DEFENSIVE_LOOP:
 			_defensive_loop(delta)
 		State.CLIMB:
-			_climb(delta)
+			_climb(delta)	
+		State.CLOUD_SEEK:
+			_cloud_seek(delta)
+		State.CLOUD_HIDE:
+			_cloud_hide(delta)		
 
-	var climb_enemy = -facing.y
-	speed -= climb_enemy * 80.0 * delta
-	if speed < PASSIVE_SPEED:
-		speed = move_toward(speed, PASSIVE_SPEED, 80.0 * delta)
-	elif speed > PASSIVE_SPEED:
-		speed = lerp(speed, PASSIVE_SPEED, 1.5 * delta)
-	speed = clamp(speed, 120.0, 300.0)
-
-	var cam_x = 0.0
-	if player != null and is_instance_valid(player):
-		cam_x = player.global_position.x
-
-	var near_x_border = position.x < cam_x - 400 or position.x > cam_x + 1000
-	if near_x_border:
-		var center_x = Vector2(cam_x + 200, position.y)
-		var to_center = (center_x - global_position).normalized()
-		var border_angle = facing.angle_to(to_center)
-		var border_turn = personal_turn_speed * 0.8 * delta
-		facing = facing.rotated(clamp(border_angle, -border_turn, border_turn))
-
-	rotation = facing.angle()
-	position += facing * speed * delta
-
-	if position.y > 560:
-		position.y = 560
-
-	if position.x < cam_x - 1500 or position.x > cam_x + 2000 or position.y < -800 or position.y > 1500:
-		queue_free()
+func _exit_tree():
+	print("ENEMY REMOVED: state=", state, " pos=", position, " hp=", hp, " stalling=", flight.stalling)
 
 func _climb(delta):
 	var target_angle = 0.0
@@ -209,7 +240,7 @@ func _climb(delta):
 	var urgency = 1.0 + clamp((position.y - 430) / 100.0, 0, 3.0)
 	var max_turn = personal_turn_speed * urgency * delta
 	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
-	speed = 220.0
+	flight.target_speed_override = 220.0
 	if position.y < 300:
 		state = State.ATTACK
 		attack_timer = 0.0
@@ -274,7 +305,7 @@ func _attack(delta):
 		state_timer = 1.5
 
 func _pause_attack(delta):
-	speed = 220.0
+	flight.target_speed_override = 220.0
 	if state_timer <= 0:
 		state = State.ATTACK
 		attack_timer = 0.0
@@ -284,7 +315,7 @@ func _recover(delta):
 		var to_player = (player.global_position - global_position).normalized()
 		var angle_diff = facing.angle_to(to_player)
 		facing = facing.rotated(clamp(angle_diff, -personal_turn_speed * delta, personal_turn_speed * delta))
-	speed = 220.0
+	flight.target_speed_override = 220.0
 	if state_timer <= 0:
 		if _try_evasion():
 			return
@@ -300,7 +331,7 @@ func _flinch(delta):
 	var angle_diff = facing.angle_to(evade_dir)
 	var max_turn = personal_turn_speed * delta
 	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
-	speed = 230.0
+	flight.target_speed_override = 230.0
 	if position.y > 430:
 		var turn_up = -1.0 if facing.x >= 0 else 1.0
 		facing = facing.rotated(turn_up * personal_turn_speed * delta)
@@ -311,7 +342,7 @@ func _flinch(delta):
 		else:
 			state = State.RECOVER
 			state_timer = randf_range(0.4, 0.7)
-		speed = 220.0
+		flight.target_speed_override = 220.0
 
 func _evade(delta):
 	facing = facing.rotated(evade_rotation_dir * 3.5 * delta)
@@ -321,7 +352,7 @@ func _evade(delta):
 	if state_timer <= 0:
 		state = State.RECOVER
 		state_timer = randf_range(0.4, 0.7)
-		speed = 220.0
+		flight.target_speed_override = 220.0
 
 func _reposition(delta):
 	if player == null or not is_instance_valid(player):
@@ -331,7 +362,7 @@ func _reposition(delta):
 	var angle_diff = facing.angle_to(to_player)
 	var max_turn = personal_turn_speed * 0.8 * delta
 	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
-	speed = 220.0
+	flight.target_speed_override = 220.0
 	if state_timer <= 0:
 		state = State.PAUSE_ATTACK
 		state_timer = randf_range(0.2, 0.5)
@@ -341,7 +372,7 @@ func _desperate(delta):
 		return
 	var to_player = (player.global_position - global_position).normalized()
 	facing = facing.lerp(to_player, TURN_SPEED * 2.0 * delta).normalized()
-	speed = 320.0
+	flight.target_speed_override = 320.0
 	var dist = global_position.distance_to(player.global_position)
 	if dist < ATTACK_RANGE and abs(facing.angle_to(to_player)) < 0.5 and shoot_timer <= 0:
 		_shoot(to_player)
@@ -352,22 +383,22 @@ func _escape(delta):
 		return
 	var away = (global_position - player.global_position).normalized()
 	facing = facing.lerp(away, 3.0 * delta).normalized()
-	speed = 320.0
+	flight.target_speed_override = 320.0
 
 func _last_loop(delta):
 	var climb = -facing.y
 	var rot_speed = 4.0 + climb * 2.5
 	var move_speed = 280.0 - climb * 80.0
 	facing = facing.rotated(evade_rotation_dir * rot_speed * delta)
-	speed = move_speed
+	flight.target_speed_override = move_speed
 	if state_timer <= 0:
 		state = State.DESPERATE
 		state_timer = 2.0
 
 func _dying(delta):
 	facing = facing.rotated(4.5 * delta)
-	facing = (facing + Vector2(0, 0.03)).normalized()
-	speed = move_toward(speed, 180.0, 60.0 * delta)
+	facing = (facing + Vector2(0, 0.15)).normalized()
+	flight.speed = move_toward(flight.speed, 80.0, 150.0 * delta)
 
 func _get_spread() -> float:
 	match state:
@@ -410,7 +441,7 @@ func _try_evasion() -> bool:
 	var options = []
 	if not near_ground and last_maneuver != "dive":
 		options.append("dive")
-	if dist < 350 and last_maneuver != "loop":
+	if dist < 250 and last_maneuver != "loop" and maneuver_cooldown < -2.0:
 		options.append("loop")
 	if last_maneuver != "evade":
 		options.append("evade")
@@ -432,7 +463,7 @@ func _try_evasion() -> bool:
 			state = State.DEFENSIVE_LOOP
 			state_timer = randf_range(1.5, 2.5)
 			last_maneuver = "loop"
-			maneuver_cooldown = randf_range(3.0, 5.0)
+			maneuver_cooldown = randf_range(5.0, 8.0)
 		"evade":
 			state = State.EVADE
 			state_timer = randf_range(1.0, 1.5)
@@ -446,22 +477,30 @@ func _dive(delta):
 	var angle_diff = facing.angle_to(dive_dir)
 	var max_turn = personal_turn_speed * 1.2 * delta
 	facing = facing.rotated(clamp(angle_diff, -max_turn, max_turn))
-	speed = 260.0
+	flight.target_speed_override = 260.0
 	if state_timer <= 0 or position.y > 380:
 		state = State.RECOVER
 		state_timer = randf_range(0.3, 0.6)
-		speed = 220.0
+		flight.target_speed_override = 220.0
 
 func _defensive_loop(delta):
 	var climb = -facing.y
-	var rot_speed = 4.0 + climb * 2.5
-	var move_speed = 280.0 - climb * 80.0
+	var rot_speed = 2.5 + climb * 1.5
+	var move_speed = 250.0 - climb * 60.0
 	facing = facing.rotated(evade_rotation_dir * rot_speed * delta)
-	speed = move_speed
+	flight.target_speed_override = move_speed
 	if state_timer <= 0:
 		state = State.RECOVER
 		state_timer = randf_range(0.3, 0.6)
-		speed = 220.0
+		flight.target_speed_override = 220.0
+
+func _cloud_seek(delta):
+	state = State.REPOSITION
+	state_timer = 2.0
+
+func _cloud_hide(delta):
+	state = State.ATTACK
+	attack_timer = 0.0		
 
 func _shoot(direction: Vector2):
 	if overheated:

@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://byopom1pgn21n"]
+
+[ext_resource type="Script" uid="uid://cgy5mvvqxbkc6" path="res://convoy_aa.gd" id="1_d0nt8"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_d0nt8"]
+size = Vector2(32, 14)
+
+[node name="Area2D" type="Area2D" unique_id=1738640699]
+script = ExtResource("1_d0nt8")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=1051897230]
+shape = SubResource("RectangleShape2D_d0nt8")

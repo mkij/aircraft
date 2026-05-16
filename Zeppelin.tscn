@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cx1sl132djbkq"]
+
+[ext_resource type="Script" uid="uid://7rwg3bha2yty" path="res://zeppelin.gd" id="1_be8f4"]
+
+[node name="Node2D" type="Node2D" unique_id=52890747]
+script = ExtResource("1_be8f4")

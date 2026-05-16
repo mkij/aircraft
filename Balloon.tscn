@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://cedqgyv7mp4vw"]
+
+[ext_resource type="Script" uid="uid://qpgg0dvjnmop" path="res://balloon.gd" id="1_12dx6"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_rpx6m"]
+radius = 20.0
+
+[node name="Area2D" type="Area2D" unique_id=486736504]
+script = ExtResource("1_12dx6")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=1396945776]
+shape = SubResource("CircleShape2D_rpx6m")

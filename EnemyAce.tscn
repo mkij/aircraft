@@ -1,0 +1,19 @@
+[gd_scene format=3 uid="uid://bmu8rhmpspnqk"]
+
+[ext_resource type="Script" uid="uid://bjpfn16uljcyy" path="res://enemy_ace.gd" id="1_6s4yb"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_enm02"]
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_enm03"]
+width = 32
+height = 16
+
+[node name="Enemy" type="Area2D" unique_id=2088351239]
+script = ExtResource("1_6s4yb")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=1449678093]
+shape = SubResource("CapsuleShape2D_enm02")
+
+[node name="Sprite2D" type="Sprite2D" parent="." unique_id=261719453]
+modulate = Color(1, 0.4, 0.4, 1)
+texture = SubResource("GradientTexture2D_enm03")

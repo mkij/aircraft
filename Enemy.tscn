@@ -1,10 +1,8 @@
-[gd_scene load_steps=4 format=3 uid="uid://enemy1234567"]
+[gd_scene format=3 uid="uid://enemy1234567"]
 
-[ext_resource type="Script" path="res://enemy_fighter.gd" id="1_enm01"]
+[ext_resource type="Script" uid="uid://dgkxibewb85c7" path="res://enemy_fighter.gd" id="1_enm01"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_enm02"]
-radius = 10.0
-height = 30.0
 
 [sub_resource type="GradientTexture2D" id="GradientTexture2D_enm03"]
 width = 32

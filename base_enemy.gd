@@ -29,6 +29,7 @@ func find_player():
 		player = players[0]
 
 func _on_area_entered(area):
+	print("AREA HIT: ", area.name, " groups=", area.get_groups())
 	if area.is_in_group("player_bullet"):
 		take_hit()
 
